@@ -120,6 +120,11 @@ export class TCCPAdapter implements DownstreamService {
     transcripts: TranscriptionResult[];
     startTime: Date;
     logFile: string;
+    // URLs returned from bot initialization
+    activitiesUrl?: string;
+    disconnectUrl?: string;
+    refreshUrl?: string;
+    baseUrl?: string;
   }>();
 
   // Log directory for per-call logs
@@ -202,12 +207,13 @@ export class TCCPAdapter implements DownstreamService {
   }
 
   /**
-   * Send HTTP POST request to AudioCodes endpoint
+   * Initialize AudioCodes bot and get conversation URLs
+   * Returns { activitiesUrl, disconnectUrl, refreshUrl, baseUrl }
    */
-  private async sendPostRequest(
-    message: AudioCodesMessage,
-    sessionId?: string
-  ): Promise<void> {
+  private async initializeBot(
+    conversationId: string,
+    sessionId: string
+  ): Promise<{ activitiesUrl: string; disconnectUrl: string; refreshUrl: string; baseUrl: string } | null> {
     const botUrl = this.config.audioCodesBotUrl || this.config.tccpEndpoint;
     const apiKey = this.config.audioCodesApiKey || this.config.tccpApiKey;
     
@@ -215,7 +221,121 @@ export class TCCPAdapter implements DownstreamService {
       throw new Error('TCCP not configured');
     }
 
+    // Extract base URL from bot URL
     const url = new URL(botUrl);
+    const baseUrl = `${url.protocol}//${url.host}`;
+
+    // Create init request (matching Go implementation)
+    const initRequest = {
+      conversation: conversationId,
+      bot: uuidv4(),
+      capabilities: ['websocket'],
+    };
+
+    const body = JSON.stringify(initRequest);
+    url.searchParams.set('apiKey', apiKey);
+    const urlString = url.toString();
+
+    this.logger.info({ 
+      url: urlString,
+      conversationId,
+    }, '📤 Initializing AudioCodes bot');
+
+    return new Promise((resolve, reject) => {
+      const isHttps = url.protocol === 'https:';
+      const port = url.port || (isHttps ? 443 : 80);
+      
+      const options = {
+        hostname: url.hostname,
+        port: port,
+        path: url.pathname + url.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+          'X-API-Key': apiKey,
+          ...(apiKey && {
+            'Authorization': `Bearer ${apiKey}`,
+          }),
+        },
+      };
+
+      const requestModule = isHttps ? https : http;
+      
+      const req = requestModule.request(options, (res) => {
+        let responseData = '';
+        res.on('data', (chunk) => {
+          responseData += chunk;
+        });
+        res.on('end', () => {
+          // Log to per-call file
+          this.logHttpRequest(sessionId, 'POST (bot init)', urlString, body, res.statusCode, responseData);
+          
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            try {
+              const response = JSON.parse(responseData);
+              const urls = {
+                activitiesUrl: baseUrl + response.activitiesURL,
+                disconnectUrl: baseUrl + response.disconnectURL,
+                refreshUrl: baseUrl + (response.refreshURL || ''),
+                baseUrl,
+              };
+              
+              this.logger.info({ 
+                activitiesUrl: urls.activitiesUrl,
+                disconnectUrl: urls.disconnectUrl,
+              }, '✅ Bot initialized, got conversation URLs');
+              
+              resolve(urls);
+            } catch (err) {
+              this.logger.warn({ error: (err as Error).message, body: responseData }, 'Failed to parse bot init response');
+              resolve(null);
+            }
+          } else {
+            this.logger.warn({ status: res.statusCode, body: responseData }, 'Bot init returned non-OK status');
+            resolve(null);
+          }
+        });
+      });
+
+      req.on('error', (err) => {
+        this.logHttpRequest(sessionId, 'POST (bot init)', urlString, body, 0, `ERROR: ${err.message}`);
+        this.logger.error({ error: err.message }, 'Failed to initialize bot');
+        resolve(null); // Don't reject, just return null
+      });
+
+      req.write(body);
+      req.end();
+    });
+  }
+
+  /**
+   * Send HTTP POST request to AudioCodes activities endpoint
+   */
+  private async sendPostRequest(
+    message: AudioCodesMessage,
+    sessionId?: string
+  ): Promise<void> {
+    const sessionData = sessionId ? this.sessions.get(sessionId) : undefined;
+    
+    // Use activitiesUrl if available (from bot init), otherwise fall back to bot URL
+    let targetUrl: string;
+    if (sessionData?.activitiesUrl) {
+      targetUrl = sessionData.activitiesUrl;
+    } else {
+      const botUrl = this.config.audioCodesBotUrl || this.config.tccpEndpoint;
+      if (!botUrl) {
+        throw new Error('TCCP not configured');
+      }
+      targetUrl = botUrl;
+    }
+    
+    const apiKey = this.config.audioCodesApiKey || this.config.tccpApiKey;
+    if (!apiKey) {
+      throw new Error('TCCP not configured');
+    }
+
+    const url = new URL(targetUrl);
     url.searchParams.set('apiKey', apiKey);
     url.searchParams.set('conversation', message.conversation);
 
@@ -302,6 +422,7 @@ export class TCCPAdapter implements DownstreamService {
     this.writeCallLog(logFile, `Event Webhook URL: ${this.config.eventWebhookUrl || 'N/A'}`);
     this.writeCallLog(logFile, `${'='.repeat(50)}\n`);
     
+    // Create session first (needed for logging in initializeBot)
     this.sessions.set(sessionId, {
       sessionId,
       conversationId: session.conversationId,
@@ -311,7 +432,24 @@ export class TCCPAdapter implements DownstreamService {
       logFile,
     });
 
-    // Send AudioCodes start activity (direct format matching Go implementation)
+    // STEP 1: Initialize bot and get conversation URLs (matching Go implementation)
+    const urls = await this.initializeBot(session.conversationId, sessionId);
+    
+    // Update session with URLs if we got them
+    if (urls) {
+      const sessionData = this.sessions.get(sessionId);
+      if (sessionData) {
+        sessionData.activitiesUrl = urls.activitiesUrl;
+        sessionData.disconnectUrl = urls.disconnectUrl;
+        sessionData.refreshUrl = urls.refreshUrl;
+        sessionData.baseUrl = urls.baseUrl;
+      }
+      this.writeCallLog(logFile, `Activities URL: ${urls.activitiesUrl}`);
+      this.writeCallLog(logFile, `Disconnect URL: ${urls.disconnectUrl}`);
+      this.writeCallLog(logFile, `${'='.repeat(50)}\n`);
+    }
+
+    // STEP 2: Send AudioCodes start activity to activitiesUrl
     const startMessage: AudioCodesMessage = {
       conversation: session.conversationId,
       activities: [{
@@ -519,6 +657,73 @@ export class TCCPAdapter implements DownstreamService {
   }
 
   /**
+   * Send disconnect to the disconnectUrl (from bot init response)
+   */
+  private async sendDisconnect(
+    disconnectUrl: string,
+    conversationId: string,
+    sessionId: string
+  ): Promise<void> {
+    const apiKey = this.config.audioCodesApiKey || this.config.tccpApiKey;
+    if (!apiKey) return;
+
+    const url = new URL(disconnectUrl);
+    url.searchParams.set('apiKey', apiKey);
+    url.searchParams.set('conversation', conversationId);
+
+    const body = JSON.stringify({ conversation: conversationId });
+    const urlString = url.toString();
+
+    this.logger.info({ url: urlString, conversationId }, '📤 Sending disconnect to disconnectUrl');
+
+    return new Promise((resolve) => {
+      const isHttps = url.protocol === 'https:';
+      const port = url.port || (isHttps ? 443 : 80);
+      
+      const options = {
+        hostname: url.hostname,
+        port: port,
+        path: url.pathname + url.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+          'X-API-Key': apiKey,
+          'Authorization': `Bearer ${apiKey}`,
+        },
+      };
+
+      const requestModule = isHttps ? https : http;
+      
+      const req = requestModule.request(options, (res) => {
+        let responseData = '';
+        res.on('data', (chunk) => {
+          responseData += chunk;
+        });
+        res.on('end', () => {
+          this.logHttpRequest(sessionId, 'POST (disconnect)', urlString, body, res.statusCode, responseData);
+          
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            this.logger.info({ status: res.statusCode }, '✅ Disconnect sent successfully');
+          } else {
+            this.logger.warn({ status: res.statusCode, body: responseData }, 'Disconnect returned non-OK status');
+          }
+          resolve();
+        });
+      });
+
+      req.on('error', (err) => {
+        this.logHttpRequest(sessionId, 'POST (disconnect)', urlString, body, 0, `ERROR: ${err.message}`);
+        this.logger.error({ error: err.message }, 'Failed to send disconnect');
+        resolve(); // Don't reject, just resolve
+      });
+
+      req.write(body);
+      req.end();
+    });
+  }
+
+  /**
    * NO-OP: TCCP does not receive audio
    */
   async sendAudioChunk(_sessionId: string, _chunk: AudioChunk): Promise<void> {
@@ -532,37 +737,42 @@ export class TCCPAdapter implements DownstreamService {
     const sessionData = this.sessions.get(sessionId);
     
     if (sessionData) {
-      // Send disconnect event (as an activity with event type)
-      const disconnectMessage: AudioCodesMessage = {
-        conversation: sessionData.conversationId,
-        activities: [{
-          id: uuidv4(),
-          timestamp: new Date().toISOString(),
-          language: 'en-US',
-          type: 'event',
-          name: 'disconnect',
-          parameters: {
-            confidence: 1.0,
-            recognitionOutput: {
-              type: 'Event',
-              channel_index: [0],
-              duration: 0,
-              start: 0,
-              is_final: true,
-              speech_final: true,
-              channel: { alternatives: [] },
-              from_finalize: false,
+      // Send disconnect to disconnectUrl if available (from bot init)
+      if (sessionData.disconnectUrl) {
+        await this.sendDisconnect(sessionData.disconnectUrl, sessionData.conversationId, sessionId);
+      } else {
+        // Fallback: Send disconnect event as activity
+        const disconnectMessage: AudioCodesMessage = {
+          conversation: sessionData.conversationId,
+          activities: [{
+            id: uuidv4(),
+            timestamp: new Date().toISOString(),
+            language: 'en-US',
+            type: 'event',
+            name: 'disconnect',
+            parameters: {
+              confidence: 1.0,
+              recognitionOutput: {
+                type: 'Event',
+                channel_index: [0],
+                duration: 0,
+                start: 0,
+                is_final: true,
+                speech_final: true,
+                channel: { alternatives: [] },
+                from_finalize: false,
+              },
+              participant: 'system',
+              participantUriUser: 'system',
             },
-            participant: 'system',
-            participantUriUser: 'system',
-          },
-        }],
-      };
+          }],
+        };
 
-      try {
-        await this.sendPostRequest(disconnectMessage, sessionId);
-      } catch {
-        // Ignore errors during cleanup
+        try {
+          await this.sendPostRequest(disconnectMessage, sessionId);
+        } catch {
+          // Ignore errors during cleanup
+        }
       }
 
       // Send completed event webhook
