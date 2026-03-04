@@ -1,4 +1,4 @@
-import { createClient } from '@deepgram/sdk';
+import { createClient, LiveTranscriptionEvents } from '@deepgram/sdk';
 import { DownstreamService, TranscriptionResult, DownstreamConfig } from './downstream';
 import { SessionRecord } from './session';
 import { FastifyBaseLogger } from 'fastify';
@@ -43,16 +43,16 @@ export class DeepgramAdapter implements DownstreamService {
 
     this.transcripts.set(sessionId, []);
 
-    connection.on('open', () => {
+    connection.on(LiveTranscriptionEvents.Open, () => {
       this.logger.info('Deepgram transcription connection opened');
     });
 
     // Log all messages from Deepgram for debugging
-    connection.on('message', (data: unknown) => {
-      this.logger.debug({ data }, 'Deepgram raw message received');
+    connection.on(LiveTranscriptionEvents.Metadata, (data: unknown) => {
+      this.logger.debug({ data }, 'Deepgram metadata received');
     });
 
-    connection.on('transcript', (data: Record<string, unknown>) => {
+    connection.on(LiveTranscriptionEvents.Transcript, (data: Record<string, unknown>) => {
       this.logger.debug({ data }, 'Deepgram transcript event');
       const channel = data['channel'] as Record<string, unknown>;
       const alternatives = channel?.['alternatives'] as Array<Record<string, unknown>>;
@@ -85,11 +85,11 @@ export class DeepgramAdapter implements DownstreamService {
       }
     });
 
-    connection.on('error', (err: Error) => {
+    connection.on(LiveTranscriptionEvents.Error, (err: Error) => {
       this.logger.error({ error: err.message }, 'Deepgram error');
     });
 
-    connection.on('close', () => {
+    connection.on(LiveTranscriptionEvents.Close, () => {
       this.logger.info('Deepgram transcription connection closed');
     });
 
