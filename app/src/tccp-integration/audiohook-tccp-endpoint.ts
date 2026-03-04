@@ -127,6 +127,19 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
             initiateRequestAuthentication({ session, request });
         }
 
+        // Add media selector to accept PCMU format from microphone client
+        session.addMediaSelector((_session, offered, _openParams) => {
+            // Find PCMU format at 8kHz (what microphone client sends)
+            const pcmuMedia = offered.find(m => m.format === 'PCMU' && m.rate === 8000);
+            if (pcmuMedia) {
+                logger.info('Selected PCMU 8kHz media format');
+                return Promise.resolve([pcmuMedia]);
+            }
+            // Fallback to first offered format
+            logger.info({ format: offered[0]?.format, rate: offered[0]?.rate }, 'Selected media format');
+            return Promise.resolve([offered[0]]);
+        });
+
         // Track audio sequence numbers per stream
         const streamSequences = new Map<string, number>();
 

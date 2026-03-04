@@ -74,15 +74,18 @@ class MediaSourceMicrophone extends EventEmitter implements MediaSource {
     }
 
     startStreaming(selectedMedia: MediaParameter | null, discardTo?: StreamDuration, startPaused?: boolean): void {
+        console.log('[MediaSource] startStreaming called, state:', this.state);
         if(this.state !== 'PREPARING') {
             throw new Error(`Cannot start stream in state '${this.state}'`);
         }
 
         if (!recordModule) {
+            console.error('[MediaSource] ERROR: node-record-lpcm16 not installed');
             this.state = 'CLOSED';
             this.emit('error', new Error('node-record-lpcm16 not installed. Run: npm install node-record-lpcm16'));
             return;
         }
+        console.log('[MediaSource] recordModule available');
 
         this.selectedMedia = selectedMedia;
 
@@ -112,7 +115,12 @@ class MediaSourceMicrophone extends EventEmitter implements MediaSource {
     }
 
     private _startMicrophoneCapture(): void {
-        if (!recordModule || !this.selectedMedia) return;
+        if (!recordModule || !this.selectedMedia) {
+            console.error('[MediaSource] ERROR: Cannot start capture - recordModule:', !!recordModule, 'selectedMedia:', !!this.selectedMedia);
+            return;
+        }
+
+        console.log('[MediaSource] Starting microphone capture...');
 
         this.microphoneRecorder = recordModule.record({
             sampleRate: this.sampleRate,
@@ -126,6 +134,10 @@ class MediaSourceMicrophone extends EventEmitter implements MediaSource {
 
         audioStream.on('data', (data: Buffer) => {
             if (this.state !== 'STREAMING') return;
+
+            if (this.frameCount === 0) {
+                console.log('[MediaSource] First audio data received, length:', data.length);
+            }
 
             // Convert L16 PCM buffer to Int16Array
             const l16Data = new Int16Array(data.buffer, data.byteOffset, data.length / 2);
