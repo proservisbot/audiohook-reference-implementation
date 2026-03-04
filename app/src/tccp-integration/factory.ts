@@ -1,5 +1,6 @@
 import { DownstreamService, DownstreamConfig } from './downstream';
 import { DeepgramAdapter } from './deepgram-adapter';
+import { TCCPAdapter } from './tccp-adapter';
 import { FastifyBaseLogger } from 'fastify';
 
 export { DownstreamService, TranscriptionResult, AudioChunk, DownstreamConfig } from './downstream';
@@ -12,8 +13,7 @@ export function createDownstreamService(config: DownstreamConfig, logger: Fastif
     case 'deepgram':
       return new DeepgramAdapter(config, logger);
     case 'tccp':
-      // Placeholder for TCCP adapter
-      throw new Error('TCCP adapter not yet implemented');
+      return new TCCPAdapter(config, logger);
     default:
       throw new Error(`Unknown transcription service: ${config.service}`);
   }

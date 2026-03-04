@@ -54,7 +54,7 @@ export interface DownstreamService {
 }
 
 export interface DownstreamConfig {
-  service: 'tccp' | 'deepgram';
+  service: 'tccp' | 'deepgram' | 'both';
   deepgramApiKey?: string;
   deepgramModel?: string;
   tccpEndpoint?: string;
