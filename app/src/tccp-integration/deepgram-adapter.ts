@@ -2,11 +2,12 @@ import { createClient, LiveTranscriptionEvents } from '@deepgram/sdk';
 import { DownstreamService, TranscriptionResult, DownstreamConfig } from './downstream';
 import { SessionRecord } from './session';
 import { FastifyBaseLogger } from 'fastify';
+import { EventEmitter } from 'events';
 
 /**
  * Deepgram Adapter - Local testing transcription service
  */
-export class DeepgramAdapter implements DownstreamService {
+export class DeepgramAdapter extends EventEmitter implements DownstreamService {
   readonly name = 'Deepgram';
   private config: DownstreamConfig;
   private deepgram: ReturnType<typeof createClient>;
@@ -15,6 +16,7 @@ export class DeepgramAdapter implements DownstreamService {
   private logger: FastifyBaseLogger;
 
   constructor(config: DownstreamConfig, logger: FastifyBaseLogger) {
+    super();
     this.config = config;
     this.logger = logger;
     
@@ -82,6 +84,8 @@ export class DeepgramAdapter implements DownstreamService {
 
       if (result.isFinal) {
         this.logger.info({ transcript: result.transcript, confidence: result.confidence }, 'Final transcript');
+        // Emit event for real-time forwarding to TCCP
+        this.emit('transcript', sessionId, result);
       }
     });
 
@@ -131,5 +135,6 @@ export class DeepgramAdapter implements DownstreamService {
     
     this.activeSessions.clear();
     this.transcripts.clear();
+    this.removeAllListeners();
   }
 }

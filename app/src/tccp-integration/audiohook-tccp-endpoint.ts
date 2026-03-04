@@ -63,6 +63,15 @@ class DownstreamServiceManager {
     async startTranscription(sessionId: string, session: SessionRecord): Promise<void> {
         // Start Deepgram transcription (receives audio)
         if (this.deepgram) {
+            // Listen for real-time transcripts from Deepgram and forward to TCCP
+            this.deepgram.on('transcript', (sid: string, transcript: TranscriptionResult) => {
+                if (sid === sessionId) {
+                    this.logger.info({ transcript: transcript.transcript }, 'Forwarding transcript to TCCP');
+                    this.sendTranscriptToTCCP(sessionId, transcript)
+                        .catch((err) => this.logger.error({ error: (err as Error).message }, 'Failed to forward transcript to TCCP'));
+                }
+            });
+            
             await this.deepgram.startTranscription(sessionId, session);
         }
 
