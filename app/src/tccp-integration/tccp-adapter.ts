@@ -270,7 +270,10 @@ export class TCCPAdapter implements DownstreamService {
     
     this.logger.info({ sessionId, conversationId: session.conversationId, turnId }, 'TCCP session initialized (AudioCodes HTTP format)');
 
-    // Send event webhook for session initiated
+    // Send event webhooks in correct sequence (matching Go implementation):
+    // 1. initiated - call is being set up
+    // 2. in-progress - call is now active
+    await this.sendEventWebhook(session.conversationId, 'initiated', 'inbound');
     await this.sendEventWebhook(session.conversationId, 'in-progress', 'inbound');
   }
 
