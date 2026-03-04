@@ -47,10 +47,17 @@ class DownstreamServiceManager {
         }
 
         // Initialize TCCP for receiving transcripts/events
-        if (this.config.tccpEndpoint && this.config.tccpApiKey && (serviceType === 'tccp' || serviceType === 'both')) {
+        // Check for either legacy TCCP config OR AudioCodes config
+        const hasTccpConfig = (this.config.tccpEndpoint && this.config.tccpApiKey) || 
+                              (this.config.audioCodesBotUrl && this.config.audioCodesApiKey);
+        
+        if (hasTccpConfig && (serviceType === 'tccp' || serviceType === 'both')) {
             this.tccp = new TCCPAdapter(this.config, this.logger);
             await this.tccp.initialize();
-            this.logger.info('TCCP event service initialized');
+            this.logger.info({ 
+                audioCodesBotUrl: this.config.audioCodesBotUrl,
+                eventWebhookUrl: this.config.eventWebhookUrl,
+            }, 'TCCP event service initialized');
         }
 
         // If only TCCP was requested but no Deepgram, we still need transcription

@@ -235,6 +235,18 @@ def create_http_app() -> web.Application:
     """Create the HTTP application."""
     app = web.Application()
     
+    # Middleware to log ALL incoming requests
+    @web.middleware
+    async def log_all_requests(request, handler):
+        logger.info(f"➡️  Incoming {request.method} {request.path}")
+        logger.info(f"   Headers: {dict(request.headers)}")
+        logger.info(f"   Query: {request.query_string}")
+        response = await handler(request)
+        logger.info(f"⬅️  Response {response.status}")
+        return response
+    
+    app.middlewares.append(log_all_requests)
+    
     # Bot activities endpoint (HTTP POST)
     app.router.add_post('/audiocodes/sbcopilotstg/CI/bot', handle_bot_activities)
     # Alternative paths
