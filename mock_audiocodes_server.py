@@ -66,7 +66,10 @@ def verify_api_key(request: web.Request) -> bool:
 async def handle_bot_activities(request: web.Request) -> web.Response:
     """Handle HTTP POST requests for bot activities at /audiocodes/sbcopilotstg/CI/bot"""
     path = request.path
-    logger.info(f"Bot activity received: {request.method} {path}")
+    logger.info(f"{'='*60}")
+    logger.info(f"📥 Bot activity received: {request.method} {path}")
+    logger.info(f"   Query: {request.query_string}")
+    logger.info(f"   Headers: {dict(request.headers)}")
     
     # Verify API key
     if not verify_api_key(request):
@@ -75,7 +78,11 @@ async def handle_bot_activities(request: web.Request) -> web.Response:
     
     # Parse JSON body
     try:
-        data = await request.json()
+        body_text = await request.text()
+        logger.info(f"   Raw Body: {body_text[:500]}...")
+        data = json.loads(body_text)
+        logger.info(f"   Parsed JSON:")
+        logger.info(json.dumps(data, indent=2))
     except Exception as e:
         logger.error(f"Failed to parse JSON body: {e}")
         return web.Response(status=400, text='Invalid JSON')
@@ -172,7 +179,10 @@ async def handle_bot_activities(request: web.Request) -> web.Response:
 async def handle_event_webhook(request: web.Request) -> web.Response:
     """Handle HTTP POST requests for call status events at /callstatus/sbcopilotstg/event"""
     path = request.path
-    logger.info(f"Event webhook received: {request.method} {path}")
+    logger.info(f"{'='*60}")
+    logger.info(f"📥 Event webhook received: {request.method} {path}")
+    logger.info(f"   Query: {request.query_string}")
+    logger.info(f"   Headers: {dict(request.headers)}")
     
     # Verify API key
     if not verify_api_key(request):
@@ -181,6 +191,8 @@ async def handle_event_webhook(request: web.Request) -> web.Response:
     
     # Parse form data
     try:
+        body_text = await request.text()
+        logger.info(f"   Raw Body: {body_text}")
         data = await request.post()
     except Exception as e:
         logger.error(f"Failed to parse form data: {e}")
