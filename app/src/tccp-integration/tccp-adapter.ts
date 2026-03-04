@@ -162,6 +162,11 @@ export class TCCPAdapter implements DownstreamService {
     const body = isJson ? JSON.stringify(data) : data as string;
     const contentType = isJson ? 'application/json' : 'application/x-www-form-urlencoded';
 
+    this.logger.info({ 
+      endpoint: url.toString(),
+      conversationId: (data as Record<string, unknown>)?.['conversation'],
+    }, '📤 Sending TCCP POST request');
+
     return new Promise((resolve, reject) => {
       const options = {
         hostname: url.hostname,
@@ -185,7 +190,7 @@ export class TCCPAdapter implements DownstreamService {
         });
         res.on('end', () => {
           if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-            this.logger.debug({ status: res.statusCode }, 'TCCP POST successful');
+            this.logger.info({ status: res.statusCode }, '✅ TCCP POST successful');
             resolve();
           } else {
             this.logger.warn({ status: res.statusCode, body: responseData }, 'TCCP POST returned non-OK status');
