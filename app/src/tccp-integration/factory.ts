@@ -1,13 +1,13 @@
 import { DownstreamService, DownstreamConfig } from './downstream';
 import { DeepgramAdapter } from './deepgram-adapter';
-import { Logger } from 'pino';
+import { FastifyBaseLogger } from 'fastify';
 
 export { DownstreamService, TranscriptionResult, AudioChunk, DownstreamConfig } from './downstream';
 
 /**
  * Factory function to create the appropriate downstream service based on config
  */
-export function createDownstreamService(config: DownstreamConfig, logger: Logger): DownstreamService {
+export function createDownstreamService(config: DownstreamConfig, logger: FastifyBaseLogger): DownstreamService {
   switch (config.service) {
     case 'deepgram':
       return new DeepgramAdapter(config, logger);

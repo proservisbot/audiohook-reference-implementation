@@ -1,7 +1,7 @@
 import { createClient } from '@deepgram/sdk';
 import { DownstreamService, TranscriptionResult, DownstreamConfig } from './downstream';
 import { SessionRecord } from './session';
-import { Logger } from 'pino';
+import { FastifyBaseLogger } from 'fastify';
 
 /**
  * Deepgram Adapter - Local testing transcription service
@@ -12,9 +12,9 @@ export class DeepgramAdapter implements DownstreamService {
   private deepgram: ReturnType<typeof createClient>;
   private activeSessions = new Map<string, ReturnType<ReturnType<typeof createClient>['listen']['live']>>();
   private transcripts = new Map<string, TranscriptionResult[]>();
-  private logger: Logger;
+  private logger: FastifyBaseLogger;
 
-  constructor(config: DownstreamConfig, logger: Logger) {
+  constructor(config: DownstreamConfig, logger: FastifyBaseLogger) {
     this.config = config;
     this.logger = logger;
     
