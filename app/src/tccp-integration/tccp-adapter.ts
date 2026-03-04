@@ -2,71 +2,130 @@ import WebSocket from 'ws';
 import { DownstreamService, TranscriptionResult, DownstreamConfig, AudioChunk } from './downstream';
 import { SessionRecord } from './session';
 import { FastifyBaseLogger } from 'fastify';
+import { v4 as uuidv4 } from 'uuid';
 
-interface TCCPMessage {
-  type: 'session_init' | 'session_close' | 'session_pause' | 'session_resume' | 'transcript' | 'error' | 'ack';
-  sessionId: string;
-  timestamp: string;
-  payload?: unknown;
+// ============================================================================
+// AudioCodes Bot API Message Format (compatible with existing TCCP projects)
+// ============================================================================
+
+interface AudioCodesWord {
+  word: string;
+  start: number;
+  end: number;
+  confidence: number;
+  punctuated_word: string;
+  speaker: number;
 }
 
-interface TCCPTranscriptPayload {
+interface AudioCodesAlternative {
   transcript: string;
   confidence: number;
-  isFinal: boolean;
-  words?: Array<{
-    word: string;
-    start: number;
-    end: number;
-    confidence: number;
-  }>;
-  channel?: 'external' | 'internal';
-  metadata?: {
-    duration: number;
-    deepgramRequestId?: string;
-  };
+  words: AudioCodesWord[];
 }
 
-interface TCCPSessionPayload {
-  conversationId: string;
-  correlationId: string;
-  organizationId?: string;
-  participant?: {
-    id: string;
-    ani?: string;
-    aniName?: string;
-    dnis?: string;
-  };
-  media?: {
-    format: string;
-    rate: number;
-    channels: number;
-  };
+interface AudioCodesChannel {
+  alternatives: AudioCodesAlternative[];
+}
+
+interface AudioCodesMetadata {
+  request_id: string;
+  model_info?: Record<string, unknown>;
+  model_uuid?: string;
+}
+
+interface AudioCodesProvider {
+  name: string;
+  type: string;
+}
+
+interface AudioCodesRecognitionOutput {
+  type: string;
+  channel_index: number[];
+  duration: number;
+  start: number;
+  is_final: boolean;
+  speech_final: boolean;
+  channel: AudioCodesChannel;
+  metadata?: AudioCodesMetadata;
+  from_finalize: boolean;
+  provider?: AudioCodesProvider;
+}
+
+interface AudioCodesActivityParameters {
+  confidence: number;
+  recognitionOutput: AudioCodesRecognitionOutput;
+  participant: string;
+  participantUriUser: string;
+  turnId?: string;
+  // Start event parameters
+  callee?: string;
+  calleeHost?: string;
+  caller?: string;
+  callerHost?: string;
+  participants?: Array<{
+    participant: string;
+    uriUser: string;
+    uriHost?: string;
+  }>;
+  vaigConversationId?: string;
+  CallSid?: string;
+  'X-Twilio-CallSid'?: string;
+}
+
+interface AudioCodesActivity {
+  id: string;
+  timestamp: string;
+  language: string;
+  type: 'message' | 'event';
+  text?: string;
+  name?: string; // for event type: 'start', 'disconnect', etc.
+  parameters: AudioCodesActivityParameters;
+}
+
+interface AudioCodesMessage {
+  conversation: string;
+  activities: AudioCodesActivity[];
+}
+
+// ============================================================================
+// TCCP WebSocket Message Wrapper
+// ============================================================================
+
+interface TCCPMessage {
+  type: 'activity' | 'disconnect' | 'error' | 'ack';
+  sessionId: string;
+  timestamp: string;
+  payload: AudioCodesMessage | { reason?: string; reasonCode?: string };
 }
 
 /**
- * TCCP Adapter - Receives Deepgram transcripts and AudioHook events
+ * TCCP Adapter - AudioCodes Bot API Compatible
  * 
- * This adapter connects to external TCCP service via WebSocket.
+ * This adapter connects to external TCCP service via WebSocket using the
+ * AudioCodes Bot API message format for compatibility with existing projects.
+ * 
  * Unlike Deepgram adapter, it does NOT receive raw audio.
  * Instead, it receives:
- * - Transcription results from Deepgram
- * - Session lifecycle events from AudioHook
- * 
- * This allows TCCP to work with existing transcription infrastructure
- * while maintaining its own workflow signaling.
+ * - Transcription results from Deepgram (forwarded as AudioCodes activities)
+ * - Session lifecycle events from AudioHook (forwarded as AudioCodes events)
  */
 export class TCCPAdapter implements DownstreamService {
   readonly name = 'TCCP';
   private config: DownstreamConfig;
   private logger: FastifyBaseLogger;
   
-  // Session management - tracks TCCP WebSocket connections
+  // Session management - tracks TCCP WebSocket connections and state
   private sessions = new Map<string, {
     ws: WebSocket;
     sessionId: string;
+    conversationId: string;
     connected: boolean;
     transcripts: TranscriptionResult[];
+    turnId: string;
+    participants: {
+      inbound: { id: string; uriUser: string };
+      outbound: { id: string; uriUser: string };
+    };
   }>();
 
   constructor(config: DownstreamConfig, logger: FastifyBaseLogger) {
@@ -84,39 +143,78 @@ export class TCCPAdapter implements DownstreamService {
     
     this.logger.info({ 
       endpoint: this.config.tccpEndpoint,
-    }, 'TCCP adapter initialized (event-based, no audio)');
+    }, 'TCCP adapter initialized (AudioCodes format, no audio)');
   }
 
   /**
-   * Start TCCP session - connects to TCCP service and signals session start
+   * Start TCCP session - connects to TCCP service and sends AudioCodes start activity
    * Called when AudioHook session opens
    */
   async startTranscription(sessionId: string, session: SessionRecord): Promise<void> {
     const ws = await this.connectToTCCP(sessionId, session);
     
+    // Generate turnId for this conversation (matches Go implementation)
+    const turnId = uuidv4();
+    
+    // Setup participants (inbound/outbound legs)
+    const participants = {
+      inbound: { id: 'participant', uriUser: 'inbound' },
+      outbound: { id: 'participant-2', uriUser: 'outbound' },
+    };
+    
     this.sessions.set(sessionId, {
       ws,
       sessionId,
+      conversationId: session.conversationId,
       connected: true,
       transcripts: [],
+      turnId,
+      participants,
     });
 
-    // Send session_init to trigger TCCP workflow
-    const initMessage: TCCPMessage = {
-      type: 'session_init',
-      sessionId,
-      timestamp: new Date().toISOString(),
-      payload: {
-        conversationId: session.conversationId,
-        correlationId: session.correlationId,
-        organizationId: session.metadata?.['organizationId'],
-        participant: session.metadata?.['participant'],
-        startedAt: session.startedAt,
-      } as TCCPSessionPayload,
+    // Send AudioCodes start activity (matches Go: sendStartActivity)
+    const startActivity: AudioCodesMessage = {
+      conversation: session.conversationId,
+      activities: [{
+        id: uuidv4(),
+        timestamp: new Date().toISOString(),
+        language: 'en-US',
+        type: 'event',
+        name: 'start',
+        parameters: {
+          confidence: 1.0,
+          recognitionOutput: {
+            type: 'Event',
+            channel_index: [0],
+            duration: 0,
+            start: 0,
+            is_final: true,
+            speech_final: true,
+            channel: {
+              alternatives: [],
+            },
+            from_finalize: false,
+          },
+          participant: 'system',
+          participantUriUser: 'system',
+          // Start event specific parameters (matching Go format)
+          callee: '+1111',
+          calleeHost: 'sip.twilio.com',
+          caller: 'SRC',
+          callerHost: 'sip.twilio.com',
+          participants: [
+            { participant: 'participant', uriUser: 'inbound', uriHost: 'twilio.com' },
+            { participant: 'participant-2', uriUser: 'outbound', uriHost: 'twilio.com' },
+          ],
+          vaigConversationId: session.conversationId,
+          CallSid: session.conversationId,
+          'X-Twilio-CallSid': session.conversationId,
+        },
+      }],
     };
 
-    ws.send(JSON.stringify(initMessage));
-    this.logger.info({ sessionId, conversationId: session.conversationId }, 'TCCP session initialized');
+    this.sendTCCPMessage(sessionId, 'activity', startActivity);
+    this.logger.info({ sessionId, conversationId: session.conversationId, turnId }, 'TCCP session initialized (AudioCodes format)');
   }
 
   /**
@@ -126,16 +224,17 @@ export class TCCPAdapter implements DownstreamService {
     const tccpEndpoint = this.config.tccpEndpoint!;
     const tccpApiKey = this.config.tccpApiKey!;
 
-    // Build connection URL
+    // Build connection URL with query params (similar to Go approach)
     const wsUrl = new URL(tccpEndpoint);
     wsUrl.searchParams.set('apiKey', tccpApiKey);
+    wsUrl.searchParams.set('conversation', session.conversationId);
     wsUrl.searchParams.set('sessionId', sessionId);
 
     const ws = new WebSocket(wsUrl.toString(), {
       headers: {
         'X-API-Key': tccpApiKey,
-        'X-Session-Id': sessionId,
         'X-Conversation-Id': session.conversationId,
+        'X-Session-Id': sessionId,
       },
       timeout: 10000,
     });
@@ -175,6 +274,23 @@ export class TCCPAdapter implements DownstreamService {
     });
   }
 
+  private sendTCCPMessage(sessionId: string, type: TCCPMessage['type'], payload: unknown): void {
+    const sessionData = this.sessions.get(sessionId);
+    if (!sessionData || !sessionData.connected) {
+      this.logger.warn({ sessionId }, 'Cannot send message - TCCP not connected');
+      return;
+    }
+
+    const message: TCCPMessage = {
+      type,
+      sessionId,
+      timestamp: new Date().toISOString(),
+      payload: payload as AudioCodesMessage,
+    };
+
+    sessionData.ws.send(JSON.stringify(message));
+  }
+
   private handleTCCPMessage(sessionId: string, message: TCCPMessage): void {
     switch (message.type) {
       case 'ack':
@@ -184,15 +300,15 @@ export class TCCPAdapter implements DownstreamService {
         this.logger.error({ sessionId, error: message.payload }, 'TCCP error');
         break;
       default:
-        this.logger.debug({ sessionId, type: message.type }, 'TCCP message');
+        this.logger.debug({ sessionId, type: message.type }, 'TCCP message received');
     }
   }
 
   /**
-   * Send transcript to TCCP
+   * Send transcript to TCCP using AudioCodes format
    * Called when Deepgram produces a transcript
    */
-  async sendTranscript(sessionId: string, transcript: TranscriptionResult): Promise<void> {
+  async sendTranscript(sessionId: string, transcript: TranscriptionResult, leg: 'inbound' | 'outbound' = 'inbound'): Promise<void> {
     const sessionData = this.sessions.get(sessionId);
     if (!sessionData || !sessionData.connected) {
       this.logger.warn({ sessionId }, 'Cannot send transcript - TCCP not connected');
@@ -201,62 +317,155 @@ export class TCCPAdapter implements DownstreamService {
 
     sessionData.transcripts.push(transcript);
 
-    const message: TCCPMessage = {
-      type: 'transcript',
-      sessionId,
-      timestamp: new Date().toISOString(),
-      payload: {
-        transcript: transcript.transcript,
-        confidence: transcript.confidence,
-        isFinal: transcript.isFinal,
-        words: transcript.words,
-        metadata: transcript.metadata,
-      } as TCCPTranscriptPayload,
+    // Determine participant based on leg (matching Go implementation)
+    const participant = leg === 'outbound' ? 'participant-2' : 'participant';
+    const participantUriUser = leg === 'outbound' ? 'outbound' : 'inbound';
+    const channelIndex = leg === 'outbound' ? [1] : [0];
+    const speaker = leg === 'outbound' ? 1 : 0;
+
+    // Convert words to AudioCodes format
+    const words: AudioCodesWord[] = (transcript.words || []).map((w, idx) => ({
+      word: w.word,
+      start: w.start,
+      end: w.end,
+      confidence: w.confidence,
+      punctuated_word: w.word, // Deepgram doesn't provide punctuated separately
+      speaker,
+    }));
+
+    // Get duration from words or default
+    const duration = words.length > 0 
+      ? words[words.length - 1].end - words[0].start 
+      : 0;
+    const start = words.length > 0 ? words[0].start : 0;
+
+    // Build AudioCodes activity message (matches Go: sendToAudioCodes)
+    const activity: AudioCodesMessage = {
+      conversation: sessionData.conversationId,
+      activities: [{
+        id: uuidv4(),
+        timestamp: new Date().toISOString(),
+        language: transcript.language || 'en-US',
+        type: 'message',
+        text: transcript.transcript,
+        parameters: {
+          confidence: transcript.confidence,
+          recognitionOutput: {
+            type: 'Results',
+            channel_index: channelIndex,
+            duration,
+            start,
+            is_final: transcript.isFinal,
+            speech_final: transcript.isFinal,
+            channel: {
+              alternatives: [{
+                transcript: transcript.transcript,
+                confidence: transcript.confidence,
+                words,
+              }],
+            },
+            metadata: transcript.metadata?.['deepgramRequestId'] ? {
+              request_id: transcript.metadata['deepgramRequestId'] as string,
+            } : undefined,
+            from_finalize: false,
+            provider: {
+              name: uuidv4(), // Unique provider instance ID
+              type: 'deepgram',
+            },
+          },
+          participant,
+          participantUriUser,
+          turnId: sessionData.turnId,
+        },
+      }],
     };
 
-    sessionData.ws.send(JSON.stringify(message));
+    this.sendTCCPMessage(sessionId, 'activity', activity);
 
     if (transcript.isFinal) {
       this.logger.info({ 
         sessionId, 
         transcript: transcript.transcript,
         confidence: transcript.confidence,
-      }, 'Sent final transcript to TCCP');
+        leg,
+      }, 'Sent final transcript to TCCP (AudioCodes format)');
     }
   }
 
   /**
    * Signal session pause to TCCP
+   * Sends a pause event activity
    */
   async pauseSession(sessionId: string): Promise<void> {
     const sessionData = this.sessions.get(sessionId);
     if (!sessionData || !sessionData.connected) return;
 
-    const message: TCCPMessage = {
-      type: 'session_pause',
-      sessionId,
-      timestamp: new Date().toISOString(),
+    const pauseActivity: AudioCodesMessage = {
+      conversation: sessionData.conversationId,
+      activities: [{
+        id: uuidv4(),
+        timestamp: new Date().toISOString(),
+        language: 'en-US',
+        type: 'event',
+        name: 'pause',
+        parameters: {
+          confidence: 1.0,
+          recognitionOutput: {
+            type: 'Event',
+            channel_index: [0],
+            duration: 0,
+            start: 0,
+            is_final: true,
+            speech_final: true,
+            channel: { alternatives: [] },
+            from_finalize: false,
+          },
+          participant: 'system',
+          participantUriUser: 'system',
+        },
+      }],
     };
 
-    sessionData.ws.send(JSON.stringify(message));
-    this.logger.info({ sessionId }, 'TCCP session paused');
+    this.sendTCCPMessage(sessionId, 'activity', pauseActivity);
+    this.logger.info({ sessionId }, 'TCCP session pause event sent');
   }
 
   /**
    * Signal session resume to TCCP
+   * Sends a resume event activity
    */
   async resumeSession(sessionId: string): Promise<void> {
     const sessionData = this.sessions.get(sessionId);
     if (!sessionData || !sessionData.connected) return;
 
-    const message: TCCPMessage = {
-      type: 'session_resume',
-      sessionId,
-      timestamp: new Date().toISOString(),
+    const resumeActivity: AudioCodesMessage = {
+      conversation: sessionData.conversationId,
+      activities: [{
+        id: uuidv4(),
+        timestamp: new Date().toISOString(),
+        language: 'en-US',
+        type: 'event',
+        name: 'resume',
+        parameters: {
+          confidence: 1.0,
+          recognitionOutput: {
+            type: 'Event',
+            channel_index: [0],
+            duration: 0,
+            start: 0,
+            is_final: true,
+            speech_final: true,
+            channel: { alternatives: [] },
+            from_finalize: false,
+          },
+          participant: 'system',
+          participantUriUser: 'system',
+        },
+      }],
     };
 
-    sessionData.ws.send(JSON.stringify(message));
-    this.logger.info({ sessionId }, 'TCCP session resumed');
+    this.sendTCCPMessage(sessionId, 'activity', resumeActivity);
+    this.logger.info({ sessionId }, 'TCCP session resume event sent');
   }
 
   /**
@@ -272,23 +481,25 @@ export class TCCPAdapter implements DownstreamService {
   /**
    * Close TCCP session
    * Called when AudioHook session closes
+   * Sends AudioCodes disconnect message (matches Go: sendAudioCodesDisconnect)
    */
   async stopTranscription(sessionId: string): Promise<TranscriptionResult[]> {
     const sessionData = this.sessions.get(sessionId);
     
     if (sessionData) {
-      // Send session_close
-      const message: TCCPMessage = {
-        type: 'session_close',
+      // Send AudioCodes disconnect (matches Go implementation)
+      const disconnectMessage: TCCPMessage = {
+        type: 'disconnect',
         sessionId,
         timestamp: new Date().toISOString(),
         payload: {
-          transcriptCount: sessionData.transcripts.length,
+          reason: 'Client Disconnected',
+          reasonCode: 'client-disconnected',
         },
       };
 
       try {
-        sessionData.ws.send(JSON.stringify(message));
+        sessionData.ws.send(JSON.stringify(disconnectMessage));
         sessionData.ws.close(1000, 'Session ended');
       } catch {
         // Ignore errors during cleanup
@@ -298,8 +509,9 @@ export class TCCPAdapter implements DownstreamService {
       
       this.logger.info({ 
         sessionId, 
+        conversationId: sessionData.conversationId,
         transcriptCount: sessionData.transcripts.length,
-      }, 'TCCP session closed');
+      }, 'TCCP session closed (AudioCodes disconnect sent)');
 
       return sessionData.transcripts;
     }
@@ -312,6 +524,17 @@ export class TCCPAdapter implements DownstreamService {
     
     for (const [sessionId, sessionData] of this.sessions) {
       try {
+        // Send disconnect for each active session
+        const disconnectMessage: TCCPMessage = {
+          type: 'disconnect',
+          sessionId,
+          timestamp: new Date().toISOString(),
+          payload: {
+            reason: 'Service shutdown',
+            reasonCode: 'service-shutdown',
+          },
+        };
+        sessionData.ws.send(JSON.stringify(disconnectMessage));
         sessionData.ws.close(1000, 'Service shutdown');
       } catch {
         // Ignore errors during shutdown

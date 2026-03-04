@@ -79,10 +79,10 @@ class DownstreamServiceManager {
         }
     }
 
-    async sendTranscriptToTCCP(sessionId: string, transcript: TranscriptionResult): Promise<void> {
-        // Forward transcript from Deepgram to TCCP
+    async sendTranscriptToTCCP(sessionId: string, transcript: TranscriptionResult, leg: 'inbound' | 'outbound' = 'inbound'): Promise<void> {
+        // Forward transcript from Deepgram to TCCP with leg information
         if (this.tccp) {
-            await this.tccp.sendTranscript(sessionId, transcript);
+            await this.tccp.sendTranscript(sessionId, transcript, leg);
         }
     }
 
