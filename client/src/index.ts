@@ -14,6 +14,7 @@ import {
 import { createClientWebSocket } from './clientwebsocket';
 import { createWavMediaSource } from './mediasource-wav';
 import { createToneMediaSource } from './mediasource-tone';
+import { createMicrophoneMediaSource } from './mediasource-mic';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { TDigest } = require('tdigest');
@@ -169,6 +170,7 @@ const checkLogLevels = (value: string): LogLevel => {
 type CmdOptions = {
     uri?: string;
     wavfile?: string;
+    microphone?: boolean;
     apiKey?: string;
     clientSecret?: Uint8Array;
     customConfig?: JsonObject;
@@ -188,6 +190,7 @@ new Command()
     .argument('[serveruri]', 'URI (wss://) of AudioHook server.')
     .option('--uri <uri>', 'URI (wss://) of AudioHook server.')
     .option('--wavfile <wavfile>', 'Filename of the WAV file to send')
+    .option('--microphone', 'Use microphone as audio source (L16 format)')
     .option('--api-key <apikey>', 'API Key value', parseApiKey)
     .option('--client-secret <base64>', 'Client secret for message signature', parseClientSecret)
     .option('--custom-config <json>', 'Stringified JSON object to be passed as "customConfig" parameter in \'open\' message', parseCustomConfig)
@@ -210,6 +213,9 @@ new Command()
         const connectionProbe = options.connectionProbe ?? false;
         if(connectionProbe && options.wavfile) {
             command.error('The connection-probe and wavfile options are mutually exclusive');
+        }
+        if(options.wavfile && options.microphone) {
+            command.error('The wavfile and microphone options are mutually exclusive');
         }
         const organizationId = options.orgid ?? uuid();
         const sessionCount = options.sessionCount ?? 1;
@@ -237,6 +243,9 @@ new Command()
                 mediaSource = createToneMediaSource(options.maxStreamDuration ?? StreamDuration.zero);
             } else if(options.wavfile) {
                 mediaSource = await createWavMediaSource(options.wavfile, options.maxStreamDuration);
+            } else if(options.microphone) {
+                mediaSource = createMicrophoneMediaSource(options.maxStreamDuration);
+                sessionLogger.info('Using microphone input - speak now!');
             } else {
                 mediaSource = createToneMediaSource(options.maxStreamDuration);
             }
