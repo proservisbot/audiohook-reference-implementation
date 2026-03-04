@@ -123,8 +123,11 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
         activeSessions.set(sessionId, sessionRecord);
 
         // Handle authentication if not already done
-        if (!(request.authenticated ?? false)) {
+        // In dev mode, skip auth to allow unsigned test requests
+        if (!isDev && !(request.authenticated ?? false)) {
             initiateRequestAuthentication({ session, request });
+        } else if (isDev) {
+            logger.info('Dev mode: Skipping signature authentication');
         }
 
         // Add media selector to accept PCMU format from microphone client
