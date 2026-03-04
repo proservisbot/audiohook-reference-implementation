@@ -1,5 +1,7 @@
 import https from 'https';
 import http from 'http';
+import fs from 'fs';
+import path from 'path';
 import { URL } from 'url';
 import { DownstreamService, TranscriptionResult, DownstreamConfig, AudioChunk } from './downstream';
 import { SessionRecord } from './session';
@@ -117,16 +119,27 @@ export class TCCPAdapter implements DownstreamService {
     turnId: string;
     transcripts: TranscriptionResult[];
     startTime: Date;
+    logFile: string;
   }>();
+
+  // Log directory for per-call logs
+  private logDir: string;
 
   constructor(config: DownstreamConfig, logger: FastifyBaseLogger) {
     this.config = config;
     this.logger = logger;
+    this.logDir = path.join(process.cwd(), 'logs', 'tccp-calls');
   }
 
   async initialize(): Promise<void> {
     const botUrl = this.config.audioCodesBotUrl || this.config.tccpEndpoint;
     const apiKey = this.config.audioCodesApiKey || this.config.tccpApiKey;
+    
+    // Create log directory if it doesn't exist
+    if (!fs.existsSync(this.logDir)) {
+      fs.mkdirSync(this.logDir, { recursive: true });
+      this.logger.info({ logDir: this.logDir }, 'Created TCCP call log directory');
+    }
     
     if (!botUrl) {
       throw new Error('AUDIOCODES_BOT_URL or TCCP_ENDPOINT is required');
@@ -142,10 +155,58 @@ export class TCCPAdapter implements DownstreamService {
   }
 
   /**
+   * Write a line to the per-call log file
+   */
+  private writeCallLog(logFile: string, message: string): void {
+    try {
+      const timestamp = new Date().toISOString();
+      fs.appendFileSync(logFile, `[${timestamp}] ${message}\n`);
+    } catch (err) {
+      this.logger.warn({ error: (err as Error).message }, 'Failed to write to call log');
+    }
+  }
+
+  /**
+   * Log an HTTP request/response to the per-call log file
+   */
+  private logHttpRequest(
+    sessionId: string,
+    method: string,
+    url: string,
+    requestBody: string,
+    responseStatus?: number,
+    responseBody?: string
+  ): void {
+    const sessionData = this.sessions.get(sessionId);
+    if (!sessionData?.logFile) return;
+
+    this.writeCallLog(sessionData.logFile, `\n--- HTTP ${method} ---`);
+    this.writeCallLog(sessionData.logFile, `URL: ${url}`);
+    this.writeCallLog(sessionData.logFile, `Request Body:`);
+    
+    // Pretty print JSON if possible
+    try {
+      const parsed = JSON.parse(requestBody);
+      this.writeCallLog(sessionData.logFile, JSON.stringify(parsed, null, 2));
+    } catch {
+      this.writeCallLog(sessionData.logFile, requestBody);
+    }
+    
+    if (responseStatus !== undefined) {
+      this.writeCallLog(sessionData.logFile, `Response Status: ${responseStatus}`);
+      if (responseBody) {
+        this.writeCallLog(sessionData.logFile, `Response Body: ${responseBody}`);
+      }
+    }
+    this.writeCallLog(sessionData.logFile, `--- END ---\n`);
+  }
+
+  /**
    * Send HTTP POST request to AudioCodes endpoint
    */
   private async sendPostRequest(
-    message: AudioCodesMessage
+    message: AudioCodesMessage,
+    sessionId?: string
   ): Promise<void> {
     const botUrl = this.config.audioCodesBotUrl || this.config.tccpEndpoint;
     const apiKey = this.config.audioCodesApiKey || this.config.tccpApiKey;
@@ -159,9 +220,10 @@ export class TCCPAdapter implements DownstreamService {
     url.searchParams.set('conversation', message.conversation);
 
     const body = JSON.stringify(message);
+    const urlString = url.toString();
 
     this.logger.info({ 
-      endpoint: url.toString(),
+      endpoint: urlString,
       conversationId: message.conversation,
       json: body,
     }, '📤 Sending AudioCodes POST request');
@@ -193,6 +255,11 @@ export class TCCPAdapter implements DownstreamService {
           responseData += chunk;
         });
         res.on('end', () => {
+          // Log to per-call file
+          if (sessionId) {
+            this.logHttpRequest(sessionId, 'POST', urlString, body, res.statusCode, responseData);
+          }
+          
           if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
             this.logger.info({ status: res.statusCode }, '✅ TCCP POST successful');
             resolve();
@@ -204,6 +271,10 @@ export class TCCPAdapter implements DownstreamService {
       });
 
       req.on('error', (err) => {
+        // Log error to per-call file
+        if (sessionId) {
+          this.logHttpRequest(sessionId, 'POST', urlString, body, 0, `ERROR: ${err.message}`);
+        }
         this.logger.error({ error: err.message }, 'Failed to send TCCP POST request');
         reject(err);
       });
@@ -219,6 +290,17 @@ export class TCCPAdapter implements DownstreamService {
    */
   async startTranscription(sessionId: string, session: SessionRecord): Promise<void> {
     const turnId = uuidv4();
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const logFile = path.join(this.logDir, `call-${session.conversationId}-${timestamp}.log`);
+    
+    // Create log file with header
+    this.writeCallLog(logFile, `=== TCCP Call Log ===`);
+    this.writeCallLog(logFile, `Session ID: ${sessionId}`);
+    this.writeCallLog(logFile, `Conversation ID: ${session.conversationId}`);
+    this.writeCallLog(logFile, `Started: ${new Date().toISOString()}`);
+    this.writeCallLog(logFile, `Bot URL: ${this.config.audioCodesBotUrl || this.config.tccpEndpoint}`);
+    this.writeCallLog(logFile, `Event Webhook URL: ${this.config.eventWebhookUrl || 'N/A'}`);
+    this.writeCallLog(logFile, `${'='.repeat(50)}\n`);
     
     this.sessions.set(sessionId, {
       sessionId,
@@ -226,6 +308,7 @@ export class TCCPAdapter implements DownstreamService {
       turnId,
       transcripts: [],
       startTime: new Date(),
+      logFile,
     });
 
     // Send AudioCodes start activity (direct format matching Go implementation)
@@ -266,15 +349,15 @@ export class TCCPAdapter implements DownstreamService {
       }],
     };
 
-    await this.sendPostRequest(startMessage);
+    await this.sendPostRequest(startMessage, sessionId);
     
-    this.logger.info({ sessionId, conversationId: session.conversationId, turnId }, 'TCCP session initialized (AudioCodes HTTP format)');
+    this.logger.info({ sessionId, conversationId: session.conversationId, turnId, logFile }, 'TCCP session initialized (AudioCodes HTTP format)');
 
     // Send event webhooks in correct sequence (matching Go implementation):
     // 1. initiated - call is being set up
     // 2. in-progress - call is now active
-    await this.sendEventWebhook(session.conversationId, 'initiated', 'inbound');
-    await this.sendEventWebhook(session.conversationId, 'in-progress', 'inbound');
+    await this.sendEventWebhook(session.conversationId, 'initiated', 'inbound', 0, sessionId);
+    await this.sendEventWebhook(session.conversationId, 'in-progress', 'inbound', 0, sessionId);
   }
 
   /**
@@ -349,7 +432,7 @@ export class TCCPAdapter implements DownstreamService {
       }],
     };
 
-    await this.sendPostRequest(activityMessage);
+    await this.sendPostRequest(activityMessage, sessionId);
 
     if (transcript.isFinal) {
       this.logger.info({ 
@@ -394,7 +477,7 @@ export class TCCPAdapter implements DownstreamService {
       }],
     };
 
-    await this.sendPostRequest(pauseMessage);
+    await this.sendPostRequest(pauseMessage, sessionId);
     this.logger.info({ sessionId }, 'TCCP session pause event sent');
   }
 
@@ -431,7 +514,7 @@ export class TCCPAdapter implements DownstreamService {
       }],
     };
 
-    await this.sendPostRequest(resumeMessage);
+    await this.sendPostRequest(resumeMessage, sessionId);
     this.logger.info({ sessionId }, 'TCCP session resume event sent');
   }
 
@@ -477,14 +560,21 @@ export class TCCPAdapter implements DownstreamService {
       };
 
       try {
-        await this.sendPostRequest(disconnectMessage);
+        await this.sendPostRequest(disconnectMessage, sessionId);
       } catch {
         // Ignore errors during cleanup
       }
 
       // Send completed event webhook
       const duration = Math.floor((Date.now() - sessionData.startTime.getTime()) / 1000);
-      await this.sendEventWebhook(sessionData.conversationId, 'completed', 'inbound', duration);
+      await this.sendEventWebhook(sessionData.conversationId, 'completed', 'inbound', duration, sessionId);
+
+      // Write final log entry
+      this.writeCallLog(sessionData.logFile, `\n${'='.repeat(50)}`);
+      this.writeCallLog(sessionData.logFile, `Call ended: ${new Date().toISOString()}`);
+      this.writeCallLog(sessionData.logFile, `Duration: ${duration} seconds`);
+      this.writeCallLog(sessionData.logFile, `Transcripts: ${sessionData.transcripts.length}`);
+      this.writeCallLog(sessionData.logFile, `${'='.repeat(50)}`);
 
       this.sessions.delete(sessionId);
       
@@ -492,6 +582,7 @@ export class TCCPAdapter implements DownstreamService {
         sessionId, 
         conversationId: sessionData.conversationId,
         transcriptCount: sessionData.transcripts.length,
+        logFile: sessionData.logFile,
       }, 'TCCP session closed (AudioCodes disconnect sent)');
 
       return sessionData.transcripts;
@@ -530,7 +621,7 @@ export class TCCPAdapter implements DownstreamService {
             },
           }],
         };
-        await this.sendPostRequest(disconnectMessage);
+        await this.sendPostRequest(disconnectMessage, sessionData.sessionId);
       } catch {
         // Ignore errors during shutdown
       }
@@ -546,7 +637,8 @@ export class TCCPAdapter implements DownstreamService {
     conversationId: string, 
     callStatus: 'initiated' | 'in-progress' | 'completed', 
     leg: string,
-    duration: number = 0
+    duration: number = 0,
+    sessionId?: string
   ): Promise<void> {
     if (!this.config.eventWebhookUrl) {
       return;
@@ -580,6 +672,7 @@ export class TCCPAdapter implements DownstreamService {
     try {
       const url = new URL(this.config.eventWebhookUrl);
       const body = formData.toString();
+      const urlString = url.toString();
       
       const isHttps = url.protocol === 'https:';
       const port = url.port || (isHttps ? 443 : 80);
@@ -608,6 +701,11 @@ export class TCCPAdapter implements DownstreamService {
             responseData += chunk;
           });
           res.on('end', () => {
+            // Log to per-call file
+            if (sessionId) {
+              this.logHttpRequest(sessionId, 'POST (webhook)', urlString, body, res.statusCode, responseData);
+            }
+            
             if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
               this.logger.info({ callStatus, leg }, '📡 Event webhook sent successfully');
               resolve();
@@ -619,6 +717,10 @@ export class TCCPAdapter implements DownstreamService {
         });
 
         req.on('error', (err) => {
+          // Log error to per-call file
+          if (sessionId) {
+            this.logHttpRequest(sessionId, 'POST (webhook)', urlString, body, 0, `ERROR: ${err.message}`);
+          }
           this.logger.error({ error: err.message }, 'Failed to send event webhook');
           reject(err);
         });
