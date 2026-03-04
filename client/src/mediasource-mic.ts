@@ -15,6 +15,7 @@ import {
     OnMediaSourceResumedHandler,
     StreamDuration,
 } from '../../app/audiohook';
+import { ulawFromL16 } from '../../app/audiohook/src/audio/ulaw';
 
 // Dynamic import for record module to avoid errors if not installed
 let recordModule: {
@@ -57,13 +58,15 @@ class MediaSourceMicrophone extends EventEmitter implements MediaSource {
     private readonly sampleEndPos: number;
     private frameDurationMs = 20; // 20ms frames
     private audioTimer: NodeJS.Timeout | null = null;
+    private frameCount = 0;
+    private logInterval = 50; // Log every 50 frames (1 second)
 
     constructor(maxDuration?: StreamDuration) {
         super();
         const channels: MediaChannels[] = [['external'], ['internal']];
         this.offeredMedia = channels.map(channels => ({ 
             type: 'audio', 
-            format: 'L16', // 16-bit linear PCM for microphone
+            format: 'PCMU', // u-law format for AudioHook compatibility
             channels, 
             rate: this.sampleRate 
         }));
@@ -124,17 +127,27 @@ class MediaSourceMicrophone extends EventEmitter implements MediaSource {
         audioStream.on('data', (data: Buffer) => {
             if (this.state !== 'STREAMING') return;
 
+            // Convert L16 PCM buffer to Int16Array
+            const l16Data = new Int16Array(data.buffer, data.byteOffset, data.length / 2);
+            
+            // Convert to u-law (PCMU)
+            const ulawData = ulawFromL16(l16Data);
+            
+            // Emit in frame-sized chunks (20ms = 160 samples at 8kHz)
             const samplesPerFrame = Math.trunc(this.frameDurationMs * this.sampleRate / 1000);
-            const bytesPerFrame = samplesPerFrame * 2 * (this.selectedMedia?.channels.length ?? 1); // 16-bit = 2 bytes
-
-            // Process data in frame-sized chunks
-            for (let offset = 0; offset < data.length; offset += bytesPerFrame) {
-                const chunk = data.slice(offset, Math.min(offset + bytesPerFrame, data.length));
-                const sampleCount = Math.trunc(chunk.length / 2 / (this.selectedMedia?.channels.length ?? 1));
+            
+            for (let offset = 0; offset < ulawData.length; offset += samplesPerFrame) {
+                const chunk = ulawData.slice(offset, Math.min(offset + samplesPerFrame, ulawData.length));
                 
-                if (sampleCount > 0) {
-                    this.emit('audio', new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
-                    this.samplePos += sampleCount;
+                if (chunk.length > 0) {
+                    this.emit('audio', chunk);
+                    this.samplePos += chunk.length;
+                    this.frameCount++;
+                    
+                    // Log every logInterval frames
+                    if (this.frameCount % this.logInterval === 0) {
+                        console.log(`[Microphone] Sent ${this.frameCount} audio frames (${this.samplePos} samples)`);
+                    }
                     
                     if (this.samplePos >= this.sampleEndPos) {
                         this._signalEnd();

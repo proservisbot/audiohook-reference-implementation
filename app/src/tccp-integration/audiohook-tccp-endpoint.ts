@@ -152,6 +152,8 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
 
         // Handle audio data - forward to transcription service using event emitter
         let audioSequence = 0;
+        let lastLogTime = Date.now();
+        let chunksSinceLog = 0;
         session.on('audio', function(this: ServerSession, frame: MediaDataFrame) {
             if (!downstreamService) return;
 
@@ -168,6 +170,19 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
             };
 
             sessionRecord.audioChunkCount++;
+            chunksSinceLog++;
+
+            // Log every 1 second
+            const now = Date.now();
+            if (now - lastLogTime >= 1000) {
+                logger.info({ 
+                    chunksReceived: chunksSinceLog, 
+                    totalChunks: sessionRecord.audioChunkCount,
+                    bytesPerChunk: audioData.length 
+                }, 'Audio chunks received');
+                chunksSinceLog = 0;
+                lastLogTime = now;
+            }
 
             downstreamService.sendAudioChunk(sessionId, chunk)
                 .catch((err) => logger.error({ error: (err as Error).message }, 'Failed to send audio chunk'));
