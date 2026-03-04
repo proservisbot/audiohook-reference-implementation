@@ -145,9 +145,7 @@ export class TCCPAdapter implements DownstreamService {
    * Send HTTP POST request to AudioCodes endpoint
    */
   private async sendPostRequest(
-    endpoint: string, 
-    data: unknown, 
-    isJson: boolean = true
+    message: AudioCodesMessage
   ): Promise<void> {
     const botUrl = this.config.audioCodesBotUrl || this.config.tccpEndpoint;
     const apiKey = this.config.audioCodesApiKey || this.config.tccpApiKey;
@@ -156,17 +154,17 @@ export class TCCPAdapter implements DownstreamService {
       throw new Error('TCCP not configured');
     }
 
-    const url = new URL(endpoint, botUrl);
+    const url = new URL(botUrl);
     url.searchParams.set('apiKey', apiKey);
-    url.searchParams.set('conversation', (data as Record<string, unknown>)?.['conversation'] as string || 'unknown');
+    url.searchParams.set('conversation', message.conversation);
 
-    const body = isJson ? JSON.stringify(data) : data as string;
-    const contentType = isJson ? 'application/json' : 'application/x-www-form-urlencoded';
+    const body = JSON.stringify(message);
 
     this.logger.info({ 
       endpoint: url.toString(),
-      conversationId: (data as Record<string, unknown>)?.['conversation'],
-    }, '📤 Sending TCCP POST request');
+      conversationId: message.conversation,
+      json: body,
+    }, '📤 Sending AudioCodes POST request');
 
     return new Promise((resolve, reject) => {
       const isHttps = url.protocol === 'https:';
@@ -178,7 +176,7 @@ export class TCCPAdapter implements DownstreamService {
         path: url.pathname + url.search,
         method: 'POST',
         headers: {
-          'Content-Type': contentType,
+          'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(body),
           'X-API-Key': apiKey,
           ...(this.config.audioCodesApiKey && {
@@ -230,50 +228,45 @@ export class TCCPAdapter implements DownstreamService {
       startTime: new Date(),
     });
 
-    // Send AudioCodes start activity
-    const startMessage: TCCPMessage = {
-      type: 'activity',
-      sessionId,
-      timestamp: new Date().toISOString(),
-      payload: {
-        conversation: session.conversationId,
-        activities: [{
-          id: uuidv4(),
-          timestamp: new Date().toISOString(),
-          language: 'en-US',
-          type: 'event',
-          name: 'start',
-          parameters: {
-            confidence: 1.0,
-            recognitionOutput: {
-              type: 'Event',
-              channel_index: [0],
-              duration: 0,
-              start: 0,
-              is_final: true,
-              speech_final: true,
-              channel: { alternatives: [] },
-              from_finalize: false,
-            },
-            participant: 'system',
-            participantUriUser: 'system',
-            callee: '+1111',
-            calleeHost: 'sip.twilio.com',
-            caller: 'SRC',
-            callerHost: 'sip.twilio.com',
-            participants: [
-              { participant: 'participant', uriUser: 'inbound', uriHost: 'twilio.com' },
-              { participant: 'participant-2', uriUser: 'outbound', uriHost: 'twilio.com' },
-            ],
-            vaigConversationId: session.conversationId,
-            CallSid: session.conversationId,
-            'X-Twilio-CallSid': session.conversationId,
+    // Send AudioCodes start activity (direct format matching Go implementation)
+    const startMessage: AudioCodesMessage = {
+      conversation: session.conversationId,
+      activities: [{
+        id: uuidv4(),
+        timestamp: new Date().toISOString(),
+        language: 'en-US',
+        type: 'event',
+        name: 'start',
+        parameters: {
+          confidence: 1.0,
+          recognitionOutput: {
+            type: 'Event',
+            channel_index: [0],
+            duration: 0,
+            start: 0,
+            is_final: true,
+            speech_final: true,
+            channel: { alternatives: [] },
+            from_finalize: false,
           },
-        }],
-      },
+          participant: 'system',
+          participantUriUser: 'system',
+          callee: '+1111',
+          calleeHost: 'sip.twilio.com',
+          caller: 'SRC',
+          callerHost: 'sip.twilio.com',
+          participants: [
+            { participant: 'participant', uriUser: 'inbound', uriHost: 'twilio.com' },
+            { participant: 'participant-2', uriUser: 'outbound', uriHost: 'twilio.com' },
+          ],
+          vaigConversationId: session.conversationId,
+          CallSid: session.conversationId,
+          'X-Twilio-CallSid': session.conversationId,
+        },
+      }],
     };
 
-    await this.sendPostRequest('/audiocodes/sbcopilotstg/CI/bot', startMessage);
+    await this.sendPostRequest(startMessage);
     
     this.logger.info({ sessionId, conversationId: session.conversationId, turnId }, 'TCCP session initialized (AudioCodes HTTP format)');
 
@@ -312,52 +305,48 @@ export class TCCPAdapter implements DownstreamService {
       : 0;
     const start = words.length > 0 ? words[0].start : 0;
 
-    const activityMessage: TCCPMessage = {
-      type: 'activity',
-      sessionId,
-      timestamp: new Date().toISOString(),
-      payload: {
-        conversation: sessionData.conversationId,
-        activities: [{
-          id: uuidv4(),
-          timestamp: new Date().toISOString(),
-          language: transcript.language || 'en-US',
-          type: 'message',
-          text: transcript.transcript,
-          parameters: {
-            confidence: transcript.confidence,
-            recognitionOutput: {
-              type: 'Results',
-              channel_index: channelIndex,
-              duration,
-              start,
-              is_final: transcript.isFinal,
-              speech_final: transcript.isFinal,
-              channel: {
-                alternatives: [{
-                  transcript: transcript.transcript,
-                  confidence: transcript.confidence,
-                  words,
-                }],
-              },
-              metadata: transcript.metadata?.['deepgramRequestId'] ? {
-                request_id: transcript.metadata['deepgramRequestId'] as string,
-              } : undefined,
-              from_finalize: false,
-              provider: {
-                name: uuidv4(),
-                type: 'deepgram',
-              },
+    // Direct AudioCodes format matching Go implementation
+    const activityMessage: AudioCodesMessage = {
+      conversation: sessionData.conversationId,
+      activities: [{
+        id: uuidv4(),
+        timestamp: new Date().toISOString(),
+        language: transcript.language || 'en-US',
+        type: 'message',
+        text: transcript.transcript,
+        parameters: {
+          confidence: transcript.confidence,
+          recognitionOutput: {
+            type: 'Results',
+            channel_index: channelIndex,
+            duration,
+            start,
+            is_final: transcript.isFinal,
+            speech_final: transcript.isFinal,
+            channel: {
+              alternatives: [{
+                transcript: transcript.transcript,
+                confidence: transcript.confidence,
+                words,
+              }],
             },
-            participant,
-            participantUriUser,
-            turnId: sessionData.turnId,
+            metadata: transcript.metadata?.['deepgramRequestId'] ? {
+              request_id: transcript.metadata['deepgramRequestId'] as string,
+            } : undefined,
+            from_finalize: false,
+            provider: {
+              name: uuidv4(),
+              type: 'deepgram',
+            },
           },
-        }],
-      },
+          participant,
+          participantUriUser,
+          turnId: sessionData.turnId,
+        },
+      }],
     };
 
-    await this.sendPostRequest('/audiocodes/sbcopilotstg/CI/bot', activityMessage);
+    await this.sendPostRequest(activityMessage);
 
     if (transcript.isFinal) {
       this.logger.info({ 
@@ -376,38 +365,33 @@ export class TCCPAdapter implements DownstreamService {
     const sessionData = this.sessions.get(sessionId);
     if (!sessionData) return;
 
-    const pauseMessage: TCCPMessage = {
-      type: 'activity',
-      sessionId,
-      timestamp: new Date().toISOString(),
-      payload: {
-        conversation: sessionData.conversationId,
-        activities: [{
-          id: uuidv4(),
-          timestamp: new Date().toISOString(),
-          language: 'en-US',
-          type: 'event',
-          name: 'pause',
-          parameters: {
-            confidence: 1.0,
-            recognitionOutput: {
-              type: 'Event',
-              channel_index: [0],
-              duration: 0,
-              start: 0,
-              is_final: true,
-              speech_final: true,
-              channel: { alternatives: [] },
-              from_finalize: false,
-            },
-            participant: 'system',
-            participantUriUser: 'system',
+    const pauseMessage: AudioCodesMessage = {
+      conversation: sessionData.conversationId,
+      activities: [{
+        id: uuidv4(),
+        timestamp: new Date().toISOString(),
+        language: 'en-US',
+        type: 'event',
+        name: 'pause',
+        parameters: {
+          confidence: 1.0,
+          recognitionOutput: {
+            type: 'Event',
+            channel_index: [0],
+            duration: 0,
+            start: 0,
+            is_final: true,
+            speech_final: true,
+            channel: { alternatives: [] },
+            from_finalize: false,
           },
-        }],
-      },
+          participant: 'system',
+          participantUriUser: 'system',
+        },
+      }],
     };
 
-    await this.sendPostRequest('/audiocodes/sbcopilotstg/CI/bot', pauseMessage);
+    await this.sendPostRequest(pauseMessage);
     this.logger.info({ sessionId }, 'TCCP session pause event sent');
   }
 
@@ -418,38 +402,33 @@ export class TCCPAdapter implements DownstreamService {
     const sessionData = this.sessions.get(sessionId);
     if (!sessionData) return;
 
-    const resumeMessage: TCCPMessage = {
-      type: 'activity',
-      sessionId,
-      timestamp: new Date().toISOString(),
-      payload: {
-        conversation: sessionData.conversationId,
-        activities: [{
-          id: uuidv4(),
-          timestamp: new Date().toISOString(),
-          language: 'en-US',
-          type: 'event',
-          name: 'resume',
-          parameters: {
-            confidence: 1.0,
-            recognitionOutput: {
-              type: 'Event',
-              channel_index: [0],
-              duration: 0,
-              start: 0,
-              is_final: true,
-              speech_final: true,
-              channel: { alternatives: [] },
-              from_finalize: false,
-            },
-            participant: 'system',
-            participantUriUser: 'system',
+    const resumeMessage: AudioCodesMessage = {
+      conversation: sessionData.conversationId,
+      activities: [{
+        id: uuidv4(),
+        timestamp: new Date().toISOString(),
+        language: 'en-US',
+        type: 'event',
+        name: 'resume',
+        parameters: {
+          confidence: 1.0,
+          recognitionOutput: {
+            type: 'Event',
+            channel_index: [0],
+            duration: 0,
+            start: 0,
+            is_final: true,
+            speech_final: true,
+            channel: { alternatives: [] },
+            from_finalize: false,
           },
-        }],
-      },
+          participant: 'system',
+          participantUriUser: 'system',
+        },
+      }],
     };
 
-    await this.sendPostRequest('/audiocodes/sbcopilotstg/CI/bot', resumeMessage);
+    await this.sendPostRequest(resumeMessage);
     this.logger.info({ sessionId }, 'TCCP session resume event sent');
   }
 
@@ -467,19 +446,35 @@ export class TCCPAdapter implements DownstreamService {
     const sessionData = this.sessions.get(sessionId);
     
     if (sessionData) {
-      // Send disconnect message
-      const disconnectMessage: TCCPMessage = {
-        type: 'disconnect',
-        sessionId,
-        timestamp: new Date().toISOString(),
-        payload: {
-          reason: 'Client Disconnected',
-          reasonCode: 'client-disconnected',
-        },
+      // Send disconnect event (as an activity with event type)
+      const disconnectMessage: AudioCodesMessage = {
+        conversation: sessionData.conversationId,
+        activities: [{
+          id: uuidv4(),
+          timestamp: new Date().toISOString(),
+          language: 'en-US',
+          type: 'event',
+          name: 'disconnect',
+          parameters: {
+            confidence: 1.0,
+            recognitionOutput: {
+              type: 'Event',
+              channel_index: [0],
+              duration: 0,
+              start: 0,
+              is_final: true,
+              speech_final: true,
+              channel: { alternatives: [] },
+              from_finalize: false,
+            },
+            participant: 'system',
+            participantUriUser: 'system',
+          },
+        }],
       };
 
       try {
-        await this.sendPostRequest('/audiocodes/sbcopilotstg/CI/bot', disconnectMessage);
+        await this.sendPostRequest(disconnectMessage);
       } catch {
         // Ignore errors during cleanup
       }
@@ -505,18 +500,34 @@ export class TCCPAdapter implements DownstreamService {
   async shutdown(): Promise<void> {
     this.logger.info('TCCP adapter shutdown');
     
-    for (const [sessionId, sessionData] of this.sessions) {
+    for (const [, sessionData] of this.sessions) {
       try {
-        const disconnectMessage: TCCPMessage = {
-          type: 'disconnect',
-          sessionId,
-          timestamp: new Date().toISOString(),
-          payload: {
-            reason: 'Service shutdown',
-            reasonCode: 'service-shutdown',
-          },
+        const disconnectMessage: AudioCodesMessage = {
+          conversation: sessionData.conversationId,
+          activities: [{
+            id: uuidv4(),
+            timestamp: new Date().toISOString(),
+            language: 'en-US',
+            type: 'event',
+            name: 'disconnect',
+            parameters: {
+              confidence: 1.0,
+              recognitionOutput: {
+                type: 'Event',
+                channel_index: [0],
+                duration: 0,
+                start: 0,
+                is_final: true,
+                speech_final: true,
+                channel: { alternatives: [] },
+                from_finalize: false,
+              },
+              participant: 'system',
+              participantUriUser: 'system',
+            },
+          }],
         };
-        await this.sendPostRequest('/audiocodes/sbcopilotstg/CI/bot', disconnectMessage);
+        await this.sendPostRequest(disconnectMessage);
       } catch {
         // Ignore errors during shutdown
       }
