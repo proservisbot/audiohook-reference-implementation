@@ -59,6 +59,9 @@ export interface DownstreamConfig {
   deepgramModel?: string;
   tccpEndpoint?: string;
   tccpApiKey?: string;
+  audioCodesBotUrl?: string;
+  audioCodesApiKey?: string;
+  eventWebhookUrl?: string;
   sampleRate: number;
   channels: number;
 }
