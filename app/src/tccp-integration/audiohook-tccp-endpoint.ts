@@ -141,6 +141,9 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
         deepgramModel: process.env['DEEPGRAM_MODEL'] || 'nova-2',
         tccpEndpoint: process.env['TCCP_ENDPOINT'],
         tccpApiKey: process.env['TCCP_API_KEY'],
+        audioCodesBotUrl: process.env['AUDIOCODES_BOT_URL'],
+        audioCodesApiKey: process.env['AUDIOCODES_API_KEY'],
+        eventWebhookUrl: process.env['EVENT_WEBHOOK_URL'],
         sampleRate: parseInt(process.env['AUDIO_SAMPLE_RATE'] || '8000', 10),
         channels: parseInt(process.env['AUDIO_CHANNELS'] || '1', 10),
     };

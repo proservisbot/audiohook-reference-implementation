@@ -1,4 +1,6 @@
 import WebSocket from 'ws';
+import https from 'https';
+import { URL } from 'url';
 import { DownstreamService, TranscriptionResult, DownstreamConfig, AudioChunk } from './downstream';
 import { SessionRecord } from './session';
 import { FastifyBaseLogger } from 'fastify';
@@ -134,15 +136,20 @@ export class TCCPAdapter implements DownstreamService {
   }
 
   async initialize(): Promise<void> {
-    if (!this.config.tccpEndpoint) {
-      throw new Error('TCCP_ENDPOINT is required');
+    // Support both legacy TCCP env vars and new AudioCodes env vars
+    const botUrl = this.config.audioCodesBotUrl || this.config.tccpEndpoint;
+    const apiKey = this.config.audioCodesApiKey || this.config.tccpApiKey;
+    
+    if (!botUrl) {
+      throw new Error('AUDIOCODES_BOT_URL or TCCP_ENDPOINT is required');
     }
-    if (!this.config.tccpApiKey) {
-      throw new Error('TCCP_API_KEY is required');
+    if (!apiKey) {
+      throw new Error('AUDIOCODES_API_KEY or TCCP_API_KEY is required');
     }
     
     this.logger.info({ 
-      endpoint: this.config.tccpEndpoint,
+      botUrl,
+      hasEventWebhook: !!this.config.eventWebhookUrl,
     }, 'TCCP adapter initialized (AudioCodes format, no audio)');
   }
 
@@ -221,18 +228,19 @@ export class TCCPAdapter implements DownstreamService {
    * Connect to TCCP WebSocket endpoint
    */
   private async connectToTCCP(sessionId: string, session: SessionRecord): Promise<WebSocket> {
-    const tccpEndpoint = this.config.tccpEndpoint!;
-    const tccpApiKey = this.config.tccpApiKey!;
+    // Use AudioCodes env vars if available, fallback to legacy TCCP vars
+    const botUrl = this.config.audioCodesBotUrl || this.config.tccpEndpoint!;
+    const apiKey = this.config.audioCodesApiKey || this.config.tccpApiKey!;
 
     // Build connection URL with query params (similar to Go approach)
-    const wsUrl = new URL(tccpEndpoint);
-    wsUrl.searchParams.set('apiKey', tccpApiKey);
+    const wsUrl = new URL(botUrl);
+    wsUrl.searchParams.set('apiKey', apiKey);
     wsUrl.searchParams.set('conversation', session.conversationId);
     wsUrl.searchParams.set('sessionId', sessionId);
 
     const ws = new WebSocket(wsUrl.toString(), {
       headers: {
-        'X-API-Key': tccpApiKey,
+        'X-API-Key': apiKey,
         'X-Conversation-Id': session.conversationId,
         'X-Session-Id': sessionId,
       },
@@ -542,5 +550,109 @@ export class TCCPAdapter implements DownstreamService {
     }
     
     this.sessions.clear();
+  }
+
+  /**
+   * Send event webhook for call status events (initiated, in-progress, completed)
+   * Matches Go implementation: sendEventWebhook
+   */
+  private async sendEventWebhook(
+    conversationId: string, 
+    callStatus: 'initiated' | 'in-progress' | 'completed', 
+    leg: string,
+    startTime?: Date
+  ): Promise<void> {
+    if (!this.config.eventWebhookUrl) {
+      return; // Event webhook not configured
+    }
+
+    // Calculate duration for completed events
+    let duration = '';
+    let callDuration = '';
+    if (callStatus === 'completed' && startTime) {
+      const elapsed = Math.floor((Date.now() - startTime.getTime()) / 1000);
+      duration = elapsed.toString();
+      callDuration = duration;
+    }
+
+    // Map leg to direction
+    const direction = leg === 'outbound' ? 'outbound-dial' : 'inbound';
+
+    // Build form data matching Twilio format (same as Go code)
+    const formData = new URLSearchParams();
+    formData.set('ApiVersion', '2010-04-01');
+    formData.set('CallSid', conversationId);
+    formData.set('ParentCallSid', conversationId);
+    formData.set('CallStatus', callStatus);
+    formData.set('Direction', direction);
+    formData.set('Timestamp', new Date().toUTCString());
+    formData.set('SequenceNumber', '0');
+    formData.set('Leg', leg);
+    formData.set('AccountSid', 'STT-SERVER');
+    formData.set('CallbackSource', 'call-progress-events');
+    formData.set('From', leg);
+    formData.set('Caller', leg);
+    formData.set('To', 'diarmuid.wrenne');
+    formData.set('Called', 'diarmuid.wrenne');
+
+    if (callStatus === 'completed') {
+      formData.set('Duration', duration);
+      formData.set('CallDuration', callDuration);
+    }
+
+    this.logger.info({ 
+      callStatus, 
+      leg, 
+      url: this.config.eventWebhookUrl 
+    }, 'Sending event webhook');
+
+    try {
+      const url = new URL(this.config.eventWebhookUrl);
+      const body = formData.toString();
+      
+      const options = {
+        hostname: url.hostname,
+        port: url.port || 443,
+        path: url.pathname + url.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+          'Content-Length': Buffer.byteLength(body),
+          ...(this.config.audioCodesApiKey && {
+            'x-auth-token': this.config.audioCodesApiKey,
+            'Authorization': `Bearer ${this.config.audioCodesApiKey}`,
+            'Api-Key': this.config.audioCodesApiKey,
+          }),
+        },
+      };
+
+      await new Promise<void>((resolve, reject) => {
+        const req = https.request(options, (res) => {
+          let responseData = '';
+          res.on('data', (chunk) => {
+            responseData += chunk;
+          });
+          res.on('end', () => {
+            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+              this.logger.info({ callStatus, leg }, 'Event webhook sent successfully');
+              resolve();
+            } else {
+              this.logger.warn({ status: res.statusCode, body: responseData }, 'Event webhook returned non-OK status');
+              resolve(); // Resolve anyway, don't block
+            }
+          });
+        });
+
+        req.on('error', (err) => {
+          this.logger.error({ error: err.message }, 'Failed to send event webhook');
+          reject(err);
+        });
+
+        req.write(body);
+        req.end();
+      });
+    } catch (err) {
+      this.logger.error({ error: (err as Error).message }, 'Failed to send event webhook');
+    }
   }
 }
