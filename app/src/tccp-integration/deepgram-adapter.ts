@@ -34,7 +34,7 @@ export class DeepgramAdapter implements DownstreamService {
       model: this.config.deepgramModel || 'nova-2',
       language: 'en-US',
       smart_format: true,
-      encoding: 'linear16',
+      encoding: 'mulaw',  // PCMU format from AudioHook
       sample_rate: this.config.sampleRate || 8000,
       channels: this.config.channels || 1,
       interim_results: true,
