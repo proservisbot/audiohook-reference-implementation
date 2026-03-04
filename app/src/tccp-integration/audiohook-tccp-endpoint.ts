@@ -3,8 +3,10 @@ import dotenv from 'dotenv';
 import { initiateRequestAuthentication, verifyRequestSignature } from '../authenticator';
 import { isUuid, httpsignature as httpsig, ServerSession, createServerSession, MediaDataFrame } from '../../audiohook';
 import { SessionWebsocketStatsTracker } from '../session-websocket-stats-tracker';
-import { createDownstreamService, DownstreamService, DownstreamConfig, AudioChunk } from './factory';
+import { createDownstreamService, DownstreamService, DownstreamConfig, AudioChunk, TranscriptionResult } from './factory';
 import { SessionRecord } from './session';
+import { DeepgramAdapter } from './deepgram-adapter';
+import { TCCPAdapter } from './tccp-adapter';
 
 dotenv.config();
 
@@ -19,13 +21,122 @@ declare module 'fastify' {
 type AuthStrategy = 'request' | 'session';
 
 /**
- * TCCP Integration Endpoint
- * Routes AudioHook audio to downstream transcription services (Deepgram, TCCP)
+ * Downstream services manager - handles both Deepgram and TCCP
+ * Deepgram: receives audio, produces transcripts
+ * TCCP: receives transcripts and AudioHook events (no audio)
  */
+class DownstreamServiceManager {
+    private deepgram: DeepgramAdapter | null = null;
+    private tccp: TCCPAdapter | null = null;
+    private logger: FastifyInstance['log'];
+    private config: DownstreamConfig;
+
+    constructor(config: DownstreamConfig, logger: FastifyInstance['log']) {
+        this.config = config;
+        this.logger = logger;
+    }
+
+    async initialize(): Promise<void> {
+        const serviceType = this.config.service;
+
+        // Always initialize Deepgram for transcription if API key provided
+        if (this.config.deepgramApiKey && (serviceType === 'deepgram' || serviceType === 'both')) {
+            this.deepgram = new DeepgramAdapter(this.config, this.logger);
+            await this.deepgram.initialize();
+            this.logger.info('Deepgram transcription service initialized');
+        }
+
+        // Initialize TCCP for receiving transcripts/events
+        if (this.config.tccpEndpoint && this.config.tccpApiKey && (serviceType === 'tccp' || serviceType === 'both')) {
+            this.tccp = new TCCPAdapter(this.config, this.logger);
+            await this.tccp.initialize();
+            this.logger.info('TCCP event service initialized');
+        }
+
+        // If only TCCP was requested but no Deepgram, we still need transcription
+        // In that case, TCCP would need to handle audio (not implemented in this adapter)
+        if (serviceType === 'tccp' && !this.deepgram && !this.tccp) {
+            throw new Error('TCCP configuration incomplete - need endpoint and API key');
+        }
+    }
+
+    async startTranscription(sessionId: string, session: SessionRecord): Promise<void> {
+        // Start Deepgram transcription (receives audio)
+        if (this.deepgram) {
+            await this.deepgram.startTranscription(sessionId, session);
+        }
+
+        // Start TCCP session (receives events)
+        if (this.tccp) {
+            await this.tccp.startTranscription(sessionId, session);
+        }
+    }
+
+    async sendAudioChunk(sessionId: string, chunk: AudioChunk): Promise<void> {
+        // Only Deepgram receives audio
+        if (this.deepgram) {
+            await this.deepgram.sendAudioChunk(sessionId, chunk);
+        }
+    }
+
+    async sendTranscriptToTCCP(sessionId: string, transcript: TranscriptionResult): Promise<void> {
+        // Forward transcript from Deepgram to TCCP
+        if (this.tccp) {
+            await this.tccp.sendTranscript(sessionId, transcript);
+        }
+    }
+
+    async pauseSession(sessionId: string): Promise<void> {
+        if (this.tccp) {
+            await this.tccp.pauseSession(sessionId);
+        }
+    }
+
+    async resumeSession(sessionId: string): Promise<void> {
+        if (this.tccp) {
+            await this.tccp.resumeSession(sessionId);
+        }
+    }
+
+    async stopTranscription(sessionId: string): Promise<TranscriptionResult[]> {
+        const transcripts: TranscriptionResult[] = [];
+
+        // Get transcripts from Deepgram
+        if (this.deepgram) {
+            const deepgramTranscripts = await this.deepgram.stopTranscription(sessionId);
+            transcripts.push(...deepgramTranscripts);
+            
+            // Forward final transcripts to TCCP
+            for (const t of deepgramTranscripts) {
+                await this.sendTranscriptToTCCP(sessionId, t);
+            }
+        }
+
+        // Stop TCCP session
+        if (this.tccp) {
+            await this.tccp.stopTranscription(sessionId);
+        }
+
+        return transcripts;
+    }
+
+    get hasDeepgram(): boolean {
+        return this.deepgram !== null;
+    }
+
+    get hasTCCP(): boolean {
+        return this.tccp !== null;
+    }
+
+    onTranscript(sessionId: string, handler: (transcript: TranscriptionResult) => void): void {
+        // Hook into Deepgram's transcript events to forward to TCCP
+        // This would need to be implemented in DeepgramAdapter to emit events
+    }
+}
 export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): void => {
-    // Initialize downstream transcription service
+    // Initialize downstream transcription services
     const config: DownstreamConfig = {
-        service: (process.env['TRANSCRIPTION_SERVICE'] as 'deepgram' | 'tccp') || 'deepgram',
+        service: (process.env['TRANSCRIPTION_SERVICE'] as 'deepgram' | 'tccp' | 'both') || 'deepgram',
         deepgramApiKey: process.env['DEEPGRAM_API_KEY'],
         deepgramModel: process.env['DEEPGRAM_MODEL'] || 'nova-2',
         tccpEndpoint: process.env['TCCP_ENDPOINT'],
@@ -34,20 +145,24 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
         channels: parseInt(process.env['AUDIO_CHANNELS'] || '1', 10),
     };
 
-    let downstreamService: DownstreamService | null = null;
+    let serviceManager: DownstreamServiceManager | null = null;
     const activeSessions = new Map<string, SessionRecord>();
 
-    // Initialize downstream service
+    // Initialize downstream services
     const initializeService = async (): Promise<void> => {
-        if (downstreamService) return;
+        if (serviceManager) return;
         
         try {
-            downstreamService = createDownstreamService(config, fastify.log);
-            await downstreamService.initialize();
-            fastify.log.info({ service: config.service }, 'TCCP downstream service initialized');
+            serviceManager = new DownstreamServiceManager(config, fastify.log);
+            await serviceManager.initialize();
+            fastify.log.info({ 
+                service: config.service,
+                hasDeepgram: serviceManager.hasDeepgram,
+                hasTCCP: serviceManager.hasTCCP,
+            }, 'TCCP downstream services initialized');
         } catch (err) {
-            fastify.log.error({ error: (err as Error).message }, 'Failed to initialize downstream service');
-            downstreamService = null;
+            fastify.log.error({ error: (err as Error).message }, 'Failed to initialize downstream services');
+            serviceManager = null;
         }
     };
 
@@ -158,23 +273,22 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
                 participant: openParams.participant,
             };
 
-            // Start transcription with downstream service
-            if (downstreamService) {
-                downstreamService.startTranscription(sessionId, sessionRecord)
+            // Start transcription with downstream services
+            if (serviceManager) {
+                serviceManager.startTranscription(sessionId, sessionRecord)
                     .then(() => logger.info('Downstream transcription started'))
                     .catch((err) => logger.error({ error: (err as Error).message }, 'Failed to start transcription'));
             }
         });
 
-        // Handle audio data - forward to transcription service using event emitter
+        // Handle audio data - forward to transcription service
         let audioSequence = 0;
         let lastLogTime = Date.now();
         let chunksSinceLog = 0;
         session.on('audio', function(this: ServerSession, frame: MediaDataFrame) {
-            if (!downstreamService) return;
+            if (!serviceManager) return;
 
             // Get audio payload from the frame's audio view
-            // frame.audio is a MultiChannelView with a data property (Uint8Array for PCMU, Int16Array for L16)
             const audioData = frame.audio.data;
             if (!audioData || audioData.length === 0) return;
 
@@ -200,7 +314,7 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
                 lastLogTime = now;
             }
 
-            downstreamService.sendAudioChunk(sessionId, chunk)
+            serviceManager.sendAudioChunk(sessionId, chunk)
                 .catch((err) => logger.error({ error: (err as Error).message }, 'Failed to send audio chunk'));
         });
 
@@ -208,12 +322,20 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
         session.on('paused', function(this: ServerSession) {
             logger.info('Session paused');
             sessionRecord.state = 'paused';
+            if (serviceManager) {
+                serviceManager.pauseSession(sessionId)
+                    .catch((err) => logger.error({ error: (err as Error).message }, 'Failed to notify TCCP of pause'));
+            }
         });
 
         // Handle resume using event emitter
         session.on('resumed', function(this: ServerSession) {
             logger.info('Session resumed');
             sessionRecord.state = 'open';
+            if (serviceManager) {
+                serviceManager.resumeSession(sessionId)
+                    .catch((err) => logger.error({ error: (err as Error).message }, 'Failed to notify TCCP of resume'));
+            }
         });
 
         // Handle session close - stop transcription and cleanup
@@ -222,9 +344,9 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
             sessionRecord.state = 'closed';
             sessionRecord.endedAt = new Date();
 
-            if (downstreamService) {
+            if (serviceManager) {
                 try {
-                    const transcripts = await downstreamService.stopTranscription(sessionId);
+                    const transcripts = await serviceManager.stopTranscription(sessionId);
                     logger.info({ 
                         transcriptCount: transcripts.length,
                         audioChunks: sessionRecord.audioChunkCount 
