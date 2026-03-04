@@ -1,4 +1,5 @@
 import https from 'https';
+import http from 'http';
 import { URL } from 'url';
 import { DownstreamService, TranscriptionResult, DownstreamConfig, AudioChunk } from './downstream';
 import { SessionRecord } from './session';
@@ -168,9 +169,12 @@ export class TCCPAdapter implements DownstreamService {
     }, '📤 Sending TCCP POST request');
 
     return new Promise((resolve, reject) => {
+      const isHttps = url.protocol === 'https:';
+      const port = url.port || (isHttps ? 443 : 80);
+      
       const options = {
         hostname: url.hostname,
-        port: url.port || 443,
+        port: port,
         path: url.pathname + url.search,
         method: 'POST',
         headers: {
@@ -183,7 +187,9 @@ export class TCCPAdapter implements DownstreamService {
         },
       };
 
-      const req = https.request(options, (res) => {
+      const requestModule = isHttps ? https : http;
+      
+      const req = requestModule.request(options, (res) => {
         let responseData = '';
         res.on('data', (chunk) => {
           responseData += chunk;
@@ -561,9 +567,12 @@ export class TCCPAdapter implements DownstreamService {
       const url = new URL(this.config.eventWebhookUrl);
       const body = formData.toString();
       
+      const isHttps = url.protocol === 'https:';
+      const port = url.port || (isHttps ? 443 : 80);
+      
       const options = {
         hostname: url.hostname,
-        port: url.port || 443,
+        port: port,
         path: url.pathname + url.search,
         method: 'POST',
         headers: {
@@ -578,7 +587,8 @@ export class TCCPAdapter implements DownstreamService {
       };
 
       await new Promise<void>((resolve, reject) => {
-        const req = https.request(options, (res) => {
+        const requestModule = isHttps ? https : http;
+        const req = requestModule.request(options, (res) => {
           let responseData = '';
           res.on('data', (chunk) => {
             responseData += chunk;
