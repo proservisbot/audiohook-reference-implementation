@@ -47,7 +47,13 @@ export class DeepgramAdapter implements DownstreamService {
       this.logger.info('Deepgram transcription connection opened');
     });
 
+    // Log all messages from Deepgram for debugging
+    connection.on('message', (data: unknown) => {
+      this.logger.debug({ data }, 'Deepgram raw message received');
+    });
+
     connection.on('transcript', (data: Record<string, unknown>) => {
+      this.logger.debug({ data }, 'Deepgram transcript event');
       const channel = data['channel'] as Record<string, unknown>;
       const alternatives = channel?.['alternatives'] as Array<Record<string, unknown>>;
       const transcript = alternatives?.[0];
