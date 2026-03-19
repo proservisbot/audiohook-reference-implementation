@@ -940,7 +940,7 @@ export class TCCPAdapter implements DownstreamService {
     formData.set('CallbackSource', 'call-progress-events');
     formData.set('From', leg);
     formData.set('Caller', leg);
-    formData.set('To', 'stt-server');
+    formData.set('To', 'michael.treyvaud');
     formData.set('Called', 'stt-server');
 
     if (callStatus === 'completed') {
