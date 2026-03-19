@@ -66,6 +66,7 @@ export class DeepgramAdapter extends EventEmitter implements DownstreamService {
         transcript: transcript['transcript'] as string,
         confidence: (transcript['confidence'] as number) || 0,
         isFinal: (data['is_final'] as boolean) || false,
+        speechFinal: (data['speech_final'] as boolean) || false,
         words: (transcript['words'] as Array<Record<string, unknown>>)?.map((w) => ({
           word: w['word'] as string,
           start: w['start'] as number,

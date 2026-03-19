@@ -8,6 +8,7 @@ import { SessionRecord } from './session';
 export interface TranscriptionResult {
   transcript: string;
   isFinal: boolean;
+  speechFinal?: boolean;
   confidence: number;
   language?: string;
   words?: Array<{

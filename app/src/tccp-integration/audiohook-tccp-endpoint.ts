@@ -73,9 +73,14 @@ class DownstreamServiceManager {
             // Listen for real-time transcripts from Deepgram and forward to TCCP
             this.deepgram.on('transcript', (sid: string, transcript: TranscriptionResult) => {
                 if (sid === sessionId) {
-                    this.logger.info({ transcript: transcript.transcript }, 'Forwarding transcript to TCCP');
-                    this.sendTranscriptToTCCP(sessionId, transcript)
-                        .catch((err) => this.logger.error({ error: (err as Error).message }, 'Failed to forward transcript to TCCP'));
+                    // Only forward transcripts where speech_final is true
+                    if (transcript.speechFinal) {
+                        this.logger.info({ transcript: transcript.transcript }, 'Forwarding transcript to TCCP (speech_final)');
+                        this.sendTranscriptToTCCP(sessionId, transcript)
+                            .catch((err) => this.logger.error({ error: (err as Error).message }, 'Failed to forward transcript to TCCP'));
+                    } else {
+                        this.logger.debug({ transcript: transcript.transcript }, 'Skipping transcript (speech_final=false)');
+                    }
                 }
             });
             
