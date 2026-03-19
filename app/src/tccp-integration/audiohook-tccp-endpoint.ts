@@ -102,6 +102,13 @@ class DownstreamServiceManager {
         }
     }
 
+    async sendParticipantEvent(sessionId: string, participant: { id: string; ani: string; aniName: string; dnis: string }, leg: 'inbound' | 'outbound' = 'inbound'): Promise<void> {
+        // Forward AudioHook participant info to TCCP/AudioCodes
+        if (this.tccp) {
+            await this.tccp.sendParticipantEvent(sessionId, participant, leg);
+        }
+    }
+
     async pauseSession(sessionId: string): Promise<void> {
         if (this.tccp) {
             await this.tccp.pauseSession(sessionId);
@@ -283,7 +290,7 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
         // Handle session open - start transcription
         session.addOpenHandler((context) => {
             const { openParams } = context;
-            logger.info({ conversationId: openParams.conversationId }, 'TCCP session opened');
+            logger.info({ conversationId: openParams.conversationId, participant: openParams.participant }, 'TCCP session opened');
             
             sessionRecord.state = 'open';
             sessionRecord.conversationId = openParams.conversationId;
@@ -295,8 +302,15 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
             // Start transcription with downstream services
             if (serviceManager) {
                 serviceManager.startTranscription(sessionId, sessionRecord)
-                    .then(() => logger.info('Downstream transcription started'))
-                    .catch((err) => logger.error({ error: (err as Error).message }, 'Failed to start transcription'));
+                    .then(() => {
+                        logger.info('Downstream transcription started');
+                        // Forward participant info to TCCP/AudioCodes
+                        if (openParams.participant && serviceManager) {
+                            return serviceManager.sendParticipantEvent(sessionId, openParams.participant, 'inbound');
+                        }
+                        return Promise.resolve();
+                    })
+                    .catch((err) => logger.error({ error: (err as Error).message }, 'Failed to start transcription or send participant event'));
             }
         });
 
