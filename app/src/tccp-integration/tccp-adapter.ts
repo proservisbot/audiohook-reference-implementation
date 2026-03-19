@@ -61,6 +61,8 @@ interface AudioCodesActivityParameters {
   participant: string;
   participantUriUser: string;
   turnId?: string;
+  // Source identifier for filtering
+  source?: string;
   // Start event parameters
   callee?: string;
   calleeHost?: string;
@@ -74,6 +76,11 @@ interface AudioCodesActivityParameters {
   vaigConversationId?: string;
   CallSid?: string;
   'X-Twilio-CallSid'?: string;
+  // Participant event parameters (for AudioHook participant info)
+  participantId?: string;
+  participantAni?: string;
+  participantAniName?: string;
+  participantDnis?: string;
 }
 
 interface AudioCodesActivity {
@@ -460,6 +467,7 @@ export class TCCPAdapter implements DownstreamService {
         name: 'start',
         parameters: {
           confidence: 1.0,
+          source: 'televoiceaudiohook',
           recognitionOutput: {
             type: 'Event',
             channel_index: [0],
@@ -540,6 +548,7 @@ export class TCCPAdapter implements DownstreamService {
         text: transcript.transcript,
         parameters: {
           confidence: transcript.confidence,
+          source: 'televoiceaudiohook',
           recognitionOutput: {
             type: 'Results',
             channel_index: channelIndex,
@@ -599,6 +608,7 @@ export class TCCPAdapter implements DownstreamService {
         name: 'pause',
         parameters: {
           confidence: 1.0,
+          source: 'televoiceaudiohook',
           recognitionOutput: {
             type: 'Event',
             channel_index: [0],
@@ -636,6 +646,7 @@ export class TCCPAdapter implements DownstreamService {
         name: 'resume',
         parameters: {
           confidence: 1.0,
+          source: 'televoiceaudiohook',
           recognitionOutput: {
             type: 'Event',
             channel_index: [0],
@@ -731,6 +742,64 @@ export class TCCPAdapter implements DownstreamService {
   }
 
   /**
+   * Send participant info as an AudioCodes activity event
+   * Called when AudioHook session opens with participant details
+   */
+  async sendParticipantEvent(
+    sessionId: string, 
+    participant: { id: string; ani: string; aniName: string; dnis: string },
+    leg: 'inbound' | 'outbound' = 'inbound'
+  ): Promise<void> {
+    const sessionData = this.sessions.get(sessionId);
+    if (!sessionData) {
+      this.logger.warn({ sessionId }, 'Cannot send participant event - session not found');
+      return;
+    }
+
+    const participantMessage: AudioCodesMessage = {
+      conversation: sessionData.conversationId,
+      activities: [{
+        id: uuidv4(),
+        timestamp: new Date().toISOString(),
+        language: 'en-US',
+        type: 'event',
+        name: 'participantJoined',
+        parameters: {
+          confidence: 1.0,
+          recognitionOutput: {
+            type: 'Event',
+            channel_index: leg === 'outbound' ? [1] : [0],
+            duration: 0,
+            start: 0,
+            is_final: true,
+            speech_final: true,
+            channel: { alternatives: [] },
+            from_finalize: false,
+          },
+          participant: leg === 'outbound' ? 'participant-2' : 'participant',
+          participantUriUser: leg === 'outbound' ? 'outbound' : 'inbound',
+          source: 'televoiceaudiohook',
+          // Include AudioHook participant details
+          participantId: participant.id,
+          participantAni: participant.ani,
+          participantAniName: participant.aniName,
+          participantDnis: participant.dnis,
+          turnId: sessionData.turnId,
+        },
+      }],
+    };
+
+    await this.sendPostRequest(participantMessage, sessionId);
+    
+    this.logger.info({ 
+      sessionId, 
+      participantId: participant.id,
+      ani: participant.ani,
+      leg,
+    }, '📤 Sent participant event to AudioCodes');
+  }
+
+  /**
    * Close TCCP session
    */
   async stopTranscription(sessionId: string): Promise<TranscriptionResult[]> {
@@ -752,6 +821,7 @@ export class TCCPAdapter implements DownstreamService {
             name: 'disconnect',
             parameters: {
               confidence: 1.0,
+              source: 'televoiceaudiohook',
               recognitionOutput: {
                 type: 'Event',
                 channel_index: [0],
@@ -816,6 +886,7 @@ export class TCCPAdapter implements DownstreamService {
             name: 'disconnect',
             parameters: {
               confidence: 1.0,
+              source: 'televoiceaudiohook',
               recognitionOutput: {
                 type: 'Event',
                 channel_index: [0],

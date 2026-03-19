@@ -94,86 +94,111 @@ async def handle_bot_activities(request: web.Request) -> web.Response:
         'data': data
     })
     
-    # Handle different message types
-    msg_type = data.get('type', 'unknown')
+    # Check if this is a bot initialization request (has 'bot' and 'capabilities')
+    if 'bot' in data and 'capabilities' in data:
+        # This is a bot init request - return the conversation URLs
+        conversation_id = data.get('conversation', 'unknown')
+        logger.info(f"[{conversation_id}] 🤖 Bot initialization request")
+        logger.info(f"[{conversation_id}]   Bot ID: {data.get('bot')}")
+        logger.info(f"[{conversation_id}]   Capabilities: {data.get('capabilities')}")
+        
+        # Build the base URL from request
+        base_url = f"http://{request.host}"
+        
+        # Return AudioCodes bot init response with URLs
+        response_data = {
+            'conversation': conversation_id,
+            'token': 'mock-token-' + conversation_id[:8],
+            'activitiesURL': f'/audiocodes/sbcopilotstg/CI/activity?conversation={conversation_id}',
+            'disconnectURL': f'/audiocodes/sbcopilotstg/CI/disconnect?conversation={conversation_id}',
+            'refreshURL': f'/audiocodes/sbcopilotstg/CI/refresh?conversation={conversation_id}',
+            'baseUrl': base_url
+        }
+        
+        logger.info(f"[{conversation_id}] ✅ Returning bot init response with URLs")
+        logger.info(f"[{conversation_id}]   activitiesURL: {response_data['activitiesURL']}")
+        logger.info(f"[{conversation_id}]   disconnectURL: {response_data['disconnectURL']}")
+        
+        return web.json_response(response_data)
+    
+    # Handle activity messages (conversation + activities array)
     conversation = data.get('conversation', 'unknown')
-    session_id = data.get('sessionId', 'unknown')
+    activities = data.get('activities', [])
     
-    logger.info(f"[{session_id}] Received {msg_type} message for conversation {conversation}")
+    logger.info(f"[{conversation}] Received {len(activities)} activities")
     
-    if msg_type == 'activity':
-        payload = data.get('payload', {})
-        activities = payload.get('activities', [])
+    for activity in activities:
+        activity_type = activity.get('type')
+        activity_name = activity.get('name')
+        activity_id = activity.get('id', 'unknown')
+        params = activity.get('parameters', {})
+        source = params.get('source', 'unknown')
         
-        for activity in activities:
-            activity_type = activity.get('type')
-            activity_name = activity.get('name')
+        # Log source tag for filtering
+        if source == 'televoiceaudiohook':
+            logger.info(f"[{conversation}] 🏷️  Source: televoiceaudiohook (AudioHook TCCP)")
+        else:
+            logger.info(f"[{conversation}] 🏷️  Source: {source}")
+        
+        if activity_type == 'event':
+            if activity_name == 'start':
+                logger.info(f"[{conversation}] 🟢 Session START event received")
+                participants = params.get('participants', [])
+                logger.info(f"[{conversation}]   Participants: {len(participants)}")
+                for p in participants:
+                    logger.info(f"[{conversation}]     - {p.get('participant')} ({p.get('uriUser')})")
+                    
+            elif activity_name == 'participantJoined':
+                logger.info(f"[{conversation}] � PARTICIPANT JOINED event received")
+                participant_id = params.get('participantId', 'unknown')
+                participant_ani = params.get('participantAni', 'unknown')
+                participant_name = params.get('participantAniName', 'unknown')
+                participant_dnis = params.get('participantDnis', 'unknown')
+                participant_leg = params.get('participantUriUser', 'unknown')
+                logger.info(f"[{conversation}]   Participant ID: {participant_id}")
+                logger.info(f"[{conversation}]   ANI: {participant_ani} ({participant_name})")
+                logger.info(f"[{conversation}]   DNIS: {participant_dnis}")
+                logger.info(f"[{conversation}]   Leg: {participant_leg}")
+                    
+            elif activity_name == 'pause':
+                logger.info(f"[{conversation}] ⏸️  Session PAUSE event received")
+                    
+            elif activity_name == 'resume':
+                logger.info(f"[{conversation}] ▶️  Session RESUME event received")
+                
+            elif activity_name == 'disconnect':
+                logger.info(f"[{conversation}] 🔴 Session DISCONNECT event received")
+                    
+            else:
+                logger.info(f"[{conversation}] Event: {activity_name}")
+                
+        elif activity_type == 'message':
+            text = activity.get('text', '')
+            recognition_output = params.get('recognitionOutput', {})
+            is_final = recognition_output.get('is_final', False)
+            confidence = params.get('confidence', 0)
+            participant = params.get('participant', 'unknown')
             
-            if activity_type == 'event':
-                if activity_name == 'start':
-                    logger.info(f"[{session_id}] 🟢 Session START event received")
-                    params = activity.get('parameters', {})
-                    participants = params.get('participants', [])
-                    logger.info(f"[{session_id}]   Participants: {len(participants)}")
-                    for p in participants:
-                        logger.info(f"[{session_id}]     - {p.get('participant')} ({p.get('uriUser')})")
-                        
-                elif activity_name == 'pause':
-                    logger.info(f"[{session_id}] ⏸️  Session PAUSE event received")
-                    
-                elif activity_name == 'resume':
-                    logger.info(f"[{session_id}] ▶️  Session RESUME event received")
-                    
-                else:
-                    logger.info(f"[{session_id}] Event: {activity_name}")
-                    
-            elif activity_type == 'message':
-                text = activity.get('text', '')
-                params = activity.get('parameters', {})
-                recognition_output = params.get('recognitionOutput', {})
-                is_final = recognition_output.get('is_final', False)
-                confidence = params.get('confidence', 0)
-                participant = params.get('participant', 'unknown')
-                
-                status = "✅ FINAL" if is_final else "📝 INTERIM"
-                logger.info(f"[{session_id}] {status} Transcript from {participant}: '{text}' (confidence: {confidence:.2f})")
-                
-                # Log word-level details if available
-                channel = recognition_output.get('channel', {})
-                alternatives = channel.get('alternatives', [])
-                if alternatives and alternatives[0].get('words'):
-                    words = alternatives[0]['words']
-                    logger.info(f"[{session_id}]   Words: {len(words)} word(s)")
+            status = "✅ FINAL" if is_final else "📝 INTERIM"
+            logger.info(f"[{conversation}] {status} Transcript from {participant}: '{text}' (confidence: {confidence:.2f})")
+            
+            # Log word-level details if available
+            channel = recognition_output.get('channel', {})
+            alternatives = channel.get('alternatives', [])
+            if alternatives and alternatives[0].get('words'):
+                words = alternatives[0]['words']
+                logger.info(f"[{conversation}]   Words: {len(words)} word(s)")
         
-        # Return acknowledgment
-        return web.json_response({
-            'type': 'ack',
-            'sessionId': session_id,
-            'timestamp': datetime.now().isoformat(),
-            'payload': {'status': 'received', 'activities_count': len(activities)}
-        })
-        
-    elif msg_type == 'disconnect':
-        payload = data.get('payload', {})
-        reason = payload.get('reason', 'Unknown')
-        reason_code = payload.get('reasonCode', 'unknown')
-        logger.info(f"[{session_id}] 🔴 Disconnect received: {reason} ({reason_code})")
-        
-        return web.json_response({
-            'type': 'ack',
-            'sessionId': session_id,
-            'timestamp': datetime.now().isoformat(),
-            'payload': {'status': 'disconnect_acknowledged'}
-        })
-        
-    else:
-        logger.info(f"[{session_id}] Unknown message type: {msg_type}")
-        return web.json_response({
-            'type': 'ack',
-            'sessionId': session_id,
-            'timestamp': datetime.now().isoformat(),
-            'payload': {'status': 'received'}
-        })
+        else:
+            logger.info(f"[{conversation}] Unknown activity type: {activity_type}")
+    
+    # Return acknowledgment
+    return web.json_response({
+        'type': 'ack',
+        'conversation': conversation,
+        'timestamp': datetime.now().isoformat(),
+        'payload': {'status': 'received', 'activities_count': len(activities)}
+    })
 
 
 async def handle_event_webhook(request: web.Request) -> web.Response:
@@ -261,8 +286,11 @@ def create_http_app() -> web.Application:
     
     # Bot activities endpoint (HTTP POST)
     app.router.add_post('/audiocodes/sbcopilotstg/CI/bot', handle_bot_activities)
+    # Activity endpoint for sending activities
+    app.router.add_post('/audiocodes/sbcopilotstg/CI/activity', handle_bot_activities)
     # Alternative paths
     app.router.add_post('/audiocodes/{path:.*}/bot', handle_bot_activities)
+    app.router.add_post('/audiocodes/{path:.*}/activity', handle_bot_activities)
     
     # Event webhook endpoint (HTTP POST with form data)
     app.router.add_post('/callstatus/sbcopilotstg/event', handle_event_webhook)
