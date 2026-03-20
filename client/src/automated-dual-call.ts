@@ -79,7 +79,7 @@ new Command()
   .option('--customer-wav <file>', 'Path to customer audio WAV file (optional, auto-detected)')
   .option('--api-key <key>', 'API key for authentication', 'test-api-key')
   .option('--client-secret <secret>', 'Client secret for authentication')
-  .option('--organization-id <id>', 'Organization ID', '00000000-0000-0000-0000-000000000001')
+  .option('--organization-id <id>', 'Organization ID (must be valid UUID)', '')
   .option('--delay <ms>', 'Delay between starting legs in ms', '500')
   .option('-v, --verbose', 'Enable verbose logging', false)
   .action(async (options: CmdOptions) => {
@@ -102,6 +102,9 @@ new Command()
       process.exit(1);
     }
 
+    // Use provided organizationId or generate one
+    const organizationId = options.organizationId || uuidv4();
+
     // Auto-detect audio files if not provided
     const baseName = conversationData.conversation_id;
     const conversationDir = path.dirname(path.resolve(options.conversation));
@@ -122,8 +125,9 @@ new Command()
       process.exit(1);
     }
 
-    // Shared conversation ID for both legs
-    const conversationId = conversationData.conversation_id;
+    // Shared conversation ID for both legs (must be UUID format)
+    const conversationId = uuidv4();
+    logger.info(`[Automated Call] Generated UUID for conversation: ${conversationId} (from ${conversationData.conversation_id})`);
 
     // Create participant info for each leg
     const customerParticipant = {
@@ -222,7 +226,7 @@ new Command()
 
       try {
         // Start customer leg first (will be 'caller' in conversation manager)
-        const customerPromise = startLeg(legs[0], options.server, options.organizationId!, options.apiKey!, clientSecret, options.verbose);
+        const customerPromise = startLeg(legs[0], options.server, organizationId, options.apiKey!, clientSecret, options.verbose);
         
         // Small delay before starting agent leg
         if (delay > 0) {
@@ -231,7 +235,7 @@ new Command()
         }
         
         // Start agent leg (will be 'agent' in conversation manager)
-        const agentPromise = startLeg(legs[1], options.server, options.organizationId!, options.apiKey!, clientSecret, options.verbose);
+        const agentPromise = startLeg(legs[1], options.server, organizationId, options.apiKey!, clientSecret, options.verbose);
 
         // Wait for both legs to complete
         await Promise.all([customerPromise, agentPromise]);
