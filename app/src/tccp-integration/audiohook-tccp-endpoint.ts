@@ -7,6 +7,7 @@ import { createDownstreamService, DownstreamService, DownstreamConfig, AudioChun
 import { SessionRecord } from './session';
 import { DeepgramAdapter } from './deepgram-adapter';
 import { TCCPAdapter } from './tccp-adapter';
+import { getConversationManager, CallLeg } from './conversation-manager';
 
 dotenv.config();
 
@@ -76,7 +77,9 @@ class DownstreamServiceManager {
                     // Only forward transcripts where speech_final is true
                     if (transcript.speechFinal) {
                         this.logger.info({ transcript: transcript.transcript }, 'Forwarding transcript to TCCP (speech_final)');
-                        this.sendTranscriptToTCCP(sessionId, transcript)
+                        // Get leg from session metadata (set during conversation registration)
+                        const leg: 'inbound' | 'outbound' = session.metadata?.leg || 'inbound';
+                        this.sendTranscriptToTCCP(sessionId, transcript, leg)
                             .catch((err) => this.logger.error({ error: (err as Error).message }, 'Failed to forward transcript to TCCP'));
                     } else {
                         this.logger.debug({ transcript: transcript.transcript }, 'Skipping transcript (speech_final=false)');
@@ -292,6 +295,9 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
         // Track audio sequence numbers per stream
         const streamSequences = new Map<string, number>();
 
+        // Initialize conversation manager for SIPREC-style multi-leg support
+        const conversationManager = getConversationManager();
+
         // Handle session open - start transcription
         session.addOpenHandler((context) => {
             const { openParams } = context;
@@ -304,14 +310,32 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
                 participant: openParams.participant,
             };
 
+            // Register session with conversation manager for dual-leg tracking
+            const conversation = conversationManager.getOrCreateConversation(
+                openParams.conversationId,
+                openParams.organizationId
+            );
+            
+            const { leg, participantId } = conversationManager.addSessionToConversation(
+                openParams.conversationId,
+                sessionId,
+                sessionRecord,
+                openParams.participant
+            );
+            
+            logger.info({ conversationId: openParams.conversationId, sessionId, leg, participantId }, 'Session joined conversation');
+            
+            // Map leg to AudioCodes format: 'caller' -> 'inbound', 'agent' -> 'outbound'
+            const audioCodesLeg: 'inbound' | 'outbound' = leg === 'caller' ? 'inbound' : 'outbound';
+
             // Start transcription with downstream services
             if (serviceManager) {
                 serviceManager.startTranscription(sessionId, sessionRecord)
                     .then(() => {
                         logger.info('Downstream transcription started');
-                        // Forward participant info to TCCP/AudioCodes
+                        // Forward participant info to TCCP/AudioCodes with leg info
                         if (openParams.participant && serviceManager) {
-                            return serviceManager.sendParticipantEvent(sessionId, openParams.participant, 'inbound');
+                            return serviceManager.sendParticipantEvent(sessionId, openParams.participant, audioCodesLeg);
                         }
                         return Promise.resolve();
                     })
@@ -391,6 +415,18 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
                     }, 'Transcription completed');
                 } catch (err) {
                     logger.error({ error: (err as Error).message }, 'Failed to stop transcription');
+                }
+            }
+
+            // Remove session from conversation manager
+            const result = conversationManager.removeSession(sessionId);
+            if (result) {
+                const { conversationId, shouldCleanup } = result;
+                logger.info({ conversationId, shouldCleanup }, 'Session removed from conversation');
+                
+                if (shouldCleanup) {
+                    conversationManager.cleanupConversation(conversationId);
+                    logger.info({ conversationId }, 'Conversation cleaned up - no more active sessions');
                 }
             }
 

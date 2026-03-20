@@ -127,6 +127,7 @@ export class TCCPAdapter implements DownstreamService {
     transcripts: TranscriptionResult[];
     startTime: Date;
     logFile: string;
+    leg?: 'inbound' | 'outbound';
     // URLs returned from bot initialization
     activitiesUrl?: string;
     disconnectUrl?: string;
@@ -437,6 +438,7 @@ export class TCCPAdapter implements DownstreamService {
       transcripts: [],
       startTime: new Date(),
       logFile,
+      leg: session.metadata?.leg || 'inbound',
     });
 
     // STEP 1: Initialize bot and get conversation URLs (matching Go implementation)
@@ -502,8 +504,9 @@ export class TCCPAdapter implements DownstreamService {
     // Send event webhooks in correct sequence (matching Go implementation):
     // 1. initiated - call is being set up
     // 2. in-progress - call is now active
-    await this.sendEventWebhook(session.conversationId, 'initiated', 'inbound', 0, sessionId);
-    await this.sendEventWebhook(session.conversationId, 'in-progress', 'inbound', 0, sessionId);
+    const leg = session.metadata?.leg || 'inbound';
+    await this.sendEventWebhook(session.conversationId, 'initiated', leg, 0, sessionId);
+    await this.sendEventWebhook(session.conversationId, 'in-progress', leg, 0, sessionId);
   }
 
   /**
@@ -845,9 +848,10 @@ export class TCCPAdapter implements DownstreamService {
         }
       }
 
-      // Send completed event webhook
+      // Send completed event webhook with leg from session
+      const leg = sessionData.leg || 'inbound';
       const duration = Math.floor((Date.now() - sessionData.startTime.getTime()) / 1000);
-      await this.sendEventWebhook(sessionData.conversationId, 'completed', 'inbound', duration, sessionId);
+      await this.sendEventWebhook(sessionData.conversationId, 'completed', leg, duration, sessionId);
 
       // Write final log entry
       this.writeCallLog(sessionData.logFile, `\n${'='.repeat(50)}`);
