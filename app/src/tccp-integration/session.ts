@@ -11,5 +11,10 @@ export interface SessionRecord {
   state: string;
   events: unknown[];
   audioChunkCount: number;
-  metadata?: Record<string, unknown>;
+  metadata?: {
+    organizationId?: string;
+    participant?: { id: string; ani: string; aniName: string; dnis: string };
+    leg?: 'inbound' | 'outbound';
+    [key: string]: unknown;
+  };
 }
