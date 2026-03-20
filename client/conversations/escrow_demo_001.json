@@ -1,0 +1,141 @@
+{
+  "conversation_id": "escrow_demo_001",
+  "topic": "mortgage_escrow_increase",
+  "participants": {
+    "agent": {
+      "name": "Sarah",
+      "role": "Mortgage Servicing Specialist"
+    },
+    "customer": {
+      "name": "John Miller"
+    }
+  },
+  "transcript": [
+    {
+      "timestamp": "00:00:02",
+      "speaker": "agent",
+      "intent": "greeting",
+      "text": "Thank you for calling Horizon Mortgage Servicing. My name is Sarah. How can I help you today?"
+    },
+    {
+      "timestamp": "00:00:07",
+      "speaker": "customer",
+      "intent": "problem_statement",
+      "text": "Hi Sarah, I just received a letter saying my mortgage payment is increasing by almost two hundred dollars. It mentions something about escrow and I don't understand why."
+    },
+    {
+      "timestamp": "00:00:18",
+      "speaker": "agent",
+      "intent": "acknowledge_concern",
+      "text": "I understand that can be frustrating. Let me take a look at your account and explain what changed. May I verify your name and the property zip code first?"
+    },
+    {
+      "timestamp": "00:00:30",
+      "speaker": "customer",
+      "intent": "provide_information",
+      "text": "Sure, it's John Miller and the property zip code is 1 1 7 9 0."
+    },
+    {
+      "timestamp": "00:00:38",
+      "speaker": "agent",
+      "intent": "account_lookup",
+      "text": "Thank you. I have your account here. I can see that we recently completed your annual escrow analysis."
+    },
+    {
+      "timestamp": "00:00:47",
+      "speaker": "customer",
+      "intent": "clarification_request",
+      "text": "Okay, but what exactly does that mean?"
+    },
+    {
+      "timestamp": "00:00:52",
+      "speaker": "agent",
+      "intent": "explain_escrow",
+      "text": "Each year we review the escrow account to make sure there is enough money to pay your property taxes and homeowners insurance when those bills come due."
+    },
+    {
+      "timestamp": "00:01:05",
+      "speaker": "agent",
+      "intent": "cause_explanation",
+      "text": "In your case, your county property taxes increased this year and your insurance premium also went up slightly. Because of that, the escrow account had a shortage."
+    },
+    {
+      "timestamp": "00:01:18",
+      "speaker": "customer",
+      "intent": "reaction",
+      "text": "So the higher payment is basically covering those increases?"
+    },
+    {
+      "timestamp": "00:01:23",
+      "speaker": "agent",
+      "intent": "confirm_explanation",
+      "text": "That's correct. Part of the increase covers the higher projected taxes and insurance, and part of it repays the escrow shortage from the past year."
+    },
+    {
+      "timestamp": "00:01:34",
+      "speaker": "customer",
+      "intent": "payment_concern",
+      "text": "Is there any way to avoid paying the shortage all at once?"
+    },
+    {
+      "timestamp": "00:01:40",
+      "speaker": "agent",
+      "intent": "offer_options",
+      "text": "Yes. You have two options. You can pay the shortage as a lump sum now, which would lower your monthly payment, or we can spread the shortage over the next twelve months."
+    },
+    {
+      "timestamp": "00:01:55",
+      "speaker": "customer",
+      "intent": "decision",
+      "text": "I think spreading it out over the year would be easier for me."
+    },
+    {
+      "timestamp": "00:02:01",
+      "speaker": "agent",
+      "intent": "confirm_plan",
+      "text": "That's completely fine. The payment amount you saw in the letter already reflects the shortage being spread over twelve months."
+    },
+    {
+      "timestamp": "00:02:12",
+      "speaker": "customer",
+      "intent": "additional_question",
+      "text": "Will it go back down next year?"
+    },
+    {
+      "timestamp": "00:02:17",
+      "speaker": "agent",
+      "intent": "set_expectations",
+      "text": "It may. If taxes and insurance remain stable and there is no shortage next year, your payment could decrease after the next escrow analysis."
+    },
+    {
+      "timestamp": "00:02:30",
+      "speaker": "agent",
+      "intent": "offer_help",
+      "text": "I can also email you the escrow analysis statement if you'd like to review the numbers in detail."
+    },
+    {
+      "timestamp": "00:02:37",
+      "speaker": "customer",
+      "intent": "accept_offer",
+      "text": "Yes, that would be helpful."
+    },
+    {
+      "timestamp": "00:02:42",
+      "speaker": "agent",
+      "intent": "closing",
+      "text": "Perfect. I'll send that to the email address we have on file. Is there anything else I can help you with today?"
+    },
+    {
+      "timestamp": "00:02:49",
+      "speaker": "customer",
+      "intent": "call_end",
+      "text": "No, that answers my question. Thanks for explaining it."
+    },
+    {
+      "timestamp": "00:02:54",
+      "speaker": "agent",
+      "intent": "farewell",
+      "text": "You're very welcome. Thank you for calling Horizon Mortgage Servicing and have a great day."
+    }
+  ]
+}
