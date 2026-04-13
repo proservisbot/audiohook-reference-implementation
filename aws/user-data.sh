@@ -101,16 +101,18 @@ cd /opt/audiohook-server
 # Fetch app config from Secrets Manager
 SECRETS=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --region "$AWS_REGION" --query 'SecretString' --output text)
 
-# Create .env file for the app
-cat > /opt/audiohook-server/app/.env << EOF
+# Create .env file in project root (PM2 cwd is /opt/audiohook-server)
+cat > /opt/audiohook-server/.env << EOF
 PORT=$APP_PORT
+SERVERPORT=$APP_PORT
+SERVERHOST=127.0.0.1
 NODE_ENV=production
 EOF
 
-# Append any additional secrets to .env
-echo "$SECRETS" | jq -r 'to_entries | .[] | "\(.key)=\(.value)"' >> /opt/audiohook-server/app/.env
+# Append secrets from AWS Secrets Manager to .env
+echo "$SECRETS" | jq -r 'to_entries | .[] | "\(.key)=\(.value)"' >> /opt/audiohook-server/.env
 
-chmod 600 /opt/audiohook-server/app/.env
+chmod 600 /opt/audiohook-server/.env
 
 # Install app dependencies (include devDeps for TypeScript build)
 cd /opt/audiohook-server/app

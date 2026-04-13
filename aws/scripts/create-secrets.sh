@@ -47,10 +47,12 @@ echo -e "${GREEN}Deploy key secret created/updated: $DEPLOY_KEY_SECRET${NC}"
 # Create or update app config secret
 echo -e "${YELLOW}Creating app config secret...${NC}"
 APP_CONFIG=$(jq -n '{
-    api_key: "your-audiohook-api-key",
-    deepgram_api_key: "your-deepgram-api-key",
-    s3_bucket: "your-s3-bucket",
-    aws_region: "us-east-1"
+    TRANSCRIPTION_SERVICE: "deepgram",
+    DEEPGRAM_API_KEY: "your-deepgram-api-key",
+    DEEPGRAM_MODEL: "nova-2",
+    AUDIOCODES_BOT_URL: "",
+    AUDIOCODES_API_KEY: "",
+    EVENT_WEBHOOK_URL: ""
 }')
 
 aws secretsmanager create-secret \
