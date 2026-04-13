@@ -43,6 +43,7 @@ server.register(async (fastify: FastifyInstance) => {
     addAudiohookVoiceTranscriptionRoute(fastify, '/api/v1/voicetranscription/ws');
     addAudiohookLoadTestRoute(fastify, '/api/v1/loadtest/ws');
     addAudiohookTccpRoute(fastify, '/api/v1/tccp/ws');
+    addAudiohookTccpRoute(fastify, '/api/v1/tcp/ws');
 });
 
 
