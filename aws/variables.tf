@@ -66,6 +66,11 @@ variable "allowed_https_cidrs" {
   default     = ["0.0.0.0/0"]
 }
 
+variable "vpc_id" {
+  description = "ID of an existing VPC to deploy into"
+  type        = string
+}
+
 variable "app_port" {
   description = "Port the application runs on"
   type        = number

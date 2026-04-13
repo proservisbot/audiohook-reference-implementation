@@ -19,13 +19,19 @@ github_repo = "git@github.com:proservisbot/audiohook-reference-implementation.gi
 # Name of existing EC2 key pair in us-east-1
 ssh_key_name = "audiohook-server"
 
-# Restrict SSH access to your IP
-allowed_ssh_cidr = "YOUR_IP/32"
+# Existing VPC (shared with jambonz-siprec)
+vpc_id = "vpc-04b16fb3bf0331aa2"
 
-# Restrict HTTPS to specific IPs (Genesys Audiohook servers + your admin IP)
-# Genesys Audiohook IPs: https://help.mypurecloud.com/articles/audiohook-streaming/
+# Restrict SSH access to your IP
+allowed_ssh_cidr = "0.0.0.0/0"
+
+# Restrict HTTPS to specific IPs (Genesys + admin)
 allowed_https_cidrs = [
-  "YOUR_IP/32"
+  "98.91.169.216/32",
+  "44.219.169.108/32",
+  "3.86.215.11/32",
+  "91.142.239.226/32",
+  "149.88.96.50/32"
 ]
 
 # Application port
