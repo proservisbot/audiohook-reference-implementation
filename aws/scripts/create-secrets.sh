@@ -50,6 +50,7 @@ APP_CONFIG=$(jq -n '{
     TRANSCRIPTION_SERVICE: "deepgram",
     DEEPGRAM_API_KEY: "your-deepgram-api-key",
     DEEPGRAM_MODEL: "nova-2",
+    STATIC_API_KEY_MAP: "{\"xHx4oIIN0zt5SckgdDnjDaEn6P\":\"\"}",
     AUDIOCODES_BOT_URL: "",
     AUDIOCODES_API_KEY: "",
     EVENT_WEBHOOK_URL: ""
