@@ -30,3 +30,23 @@ npm-debug.log*
 
 
 venv/
+
+# Terraform
+aws/.terraform/
+aws/.terraform.lock.hcl
+aws/terraform.tfstate
+aws/terraform.tfstate.backup
+aws/terraform.tfstate.d/
+aws/*.tfstate
+aws/*.tfstate.*
+aws/tfplan
+aws/*.tfplan
+aws/*.plan
+aws/*.tfvars
+!aws/terraform.tfvars.example
+aws/crash.log
+aws/crash.*.log
+aws/override.tf
+aws/override.tf.json
+aws/*_override.tf
+aws/*_override.tf.json
