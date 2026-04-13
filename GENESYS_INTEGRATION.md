@@ -6,18 +6,18 @@ Your audiohook server is live and ready for integration with Genesys Cloud.
 
 | Setting | Value |
 |---------|-------|
-| **WebSocket URI** | `wss://genisys-adapter.servismix.com/api/v1/tccp/ws` |
+| **WebSocket URI** | `wss://genesys-adapter.servismix.com/api/v1/tccp/ws` |
 | **API Key** | `xHx4oIIN0zt5SckgdDnjDaEn6P` |
 | **Protocol** | AudioHook (WebSocket) |
 | **Audio Format** | PCMU, 8kHz |
-| **Health Check** | `https://genisys-adapter.servismix.com/health/check` |
+| **Health Check** | `https://genesys-adapter.servismix.com/health/check` |
 
 ## Genesys Cloud Configuration Steps
 
 1. **Navigate to** Admin → Integrations → Add Integration
 2. **Search for** "AudioHook" and select it
 3. **Configure the integration:**
-   - **Connection URI**: `wss://genisys-adapter.servismix.com/api/v1/tccp/ws`
+   - **Connection URI**: `wss://genesys-adapter.servismix.com/api/v1/tccp/ws`
    - **API Key**: `xHx4oIIN0zt5SckgdDnjDaEn6P`
    - **Client Secret**: *(leave empty)*
 4. **Set the channel** to `external` (single channel) or configure dual-stream as needed
@@ -34,7 +34,7 @@ Your audiohook server is live and ready for integration with Genesys Cloud.
 
 You can verify the server is healthy at any time:
 ```
-curl https://genisys-adapter.servismix.com/health/check
+curl https://genesys-adapter.servismix.com/health/check
 ```
 Expected response: `{"Http-Status":200,"Healthy":true}`
 
