@@ -32,22 +32,11 @@ echo -e "${YELLOW}============================================${NC}"
 echo ""
 
 # Fetch transcripts
-# Get current instance ID for log stream filtering
-INSTANCE_ID=$(aws ec2 describe-instances \
-    --filters "Name=tag:Name,Values=audiohook-server-server" "Name=instance-state-name,Values=running" \
-    --query 'Reservations[0].Instances[0].InstanceId' \
-    --output text \
-    --region "$AWS_REGION" \
-    --profile "$AWS_PROFILE" 2>/dev/null)
-
-STREAM_PREFIX="${INSTANCE_ID}/stdout"
-
 echo -e "${GREEN}Fetching final transcripts...${NC}"
 echo ""
 
 aws logs filter-log-events \
     --log-group-name "$LOG_GROUP" \
-    --log-stream-names "$STREAM_PREFIX" \
     --filter-pattern '"Final transcript"' \
     --start-time "$START_TIME" \
     --region "$AWS_REGION" \
@@ -74,7 +63,6 @@ echo ""
 
 aws logs filter-log-events \
     --log-group-name "$LOG_GROUP" \
-    --log-stream-names "$STREAM_PREFIX" \
     --filter-pattern '"Transcription completed"' \
     --start-time "$START_TIME" \
     --region "$AWS_REGION" \
