@@ -20,11 +20,31 @@ Use these in the CloudWatch console or CLI to filter app logs:
 | Errors | `"level\":50` |
 | Health checks | `"/health/check"` |
 
+## Scripts
+
+### View recent transcripts (recommended)
+```bash
+# Last 30 minutes, 20 transcripts (default)
+./aws/scripts/view-transcripts.sh
+
+# Last 2 hours, 50 transcripts
+./aws/scripts/view-transcripts.sh 120 50
+
+# Last 24 hours, 100 transcripts
+./aws/scripts/view-transcripts.sh 1440 100
+```
+
+### Test the server
+```bash
+cd client
+./test-genesys.sh
+```
+
 ## CLI Commands
 
 **Prerequisites:** AWS CLI configured with profile `024124091015_SherpaPowerUser`.
 
-### View recent transcripts
+### View recent transcripts (raw)
 ```bash
 aws logs filter-log-events \
   --log-group-name /audiohook-server/app \
