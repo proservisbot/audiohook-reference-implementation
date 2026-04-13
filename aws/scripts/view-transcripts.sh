@@ -41,8 +41,8 @@ aws logs filter-log-events \
     --start-time "$START_TIME" \
     --region "$AWS_REGION" \
     --profile "$AWS_PROFILE" \
-    --limit "$LIMIT" \
-    --output json | jq -r '.events[].message' | sort -u | while IFS= read -r line; do
+    --limit $(( LIMIT * 2 )) \
+    --output json | jq -r '.events[].message' | sort -u | head -n "$LIMIT" | while IFS= read -r line; do
         # Extract timestamp, transcript and confidence from JSON log line
         TIMESTAMP=$(echo "$line" | sed -n 's/^\([0-9T:-]*\):.*/\1/p')
         JSON=$(echo "$line" | sed 's/^[^{]*//')
