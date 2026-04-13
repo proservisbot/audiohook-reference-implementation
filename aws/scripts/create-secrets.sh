@@ -3,7 +3,7 @@ set -e
 
 # Configuration
 AWS_REGION="${AWS_REGION:-us-east-1}"
-AWS_PROFILE="${AWS_PROFILE:-default}"
+AWS_PROFILE="${AWS_PROFILE:-024124091015_SherpaPowerUser}"
 SECRET_NAME="${SECRET_NAME:-audiohook-server/config}"
 DEPLOY_KEY_SECRET="${DEPLOY_KEY_SECRET:-audiohook-server/deploy-key}"
 

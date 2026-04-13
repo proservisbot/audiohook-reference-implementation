@@ -1,5 +1,5 @@
 aws_region   = "us-east-1"
-aws_profile  = "default"
+aws_profile  = "024124091015_SherpaPowerUser"
 project_name = "audiohook-server"
 instance_type = "t3.small"
 

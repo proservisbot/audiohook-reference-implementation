@@ -3,7 +3,7 @@ set -e
 
 # Configuration
 AWS_REGION="${AWS_REGION:-us-east-1}"
-AWS_PROFILE="${AWS_PROFILE:-default}"
+AWS_PROFILE="${AWS_PROFILE:-024124091015_SherpaPowerUser}"
 INSTANCE_TAG="${INSTANCE_TAG:-audiohook-server-server}"
 BRANCH="${1:-main}"
 
