@@ -1,9 +1,11 @@
 import { FastifyInstance } from 'fastify';
 import dotenv from 'dotenv';
 import { initiateRequestAuthentication, verifyRequestSignature } from '../authenticator';
-import { isUuid, httpsignature as httpsig, ServerSession, createServerSession, MediaDataFrame } from '../../audiohook';
+import { verifyRequestJwt, getJwtAuthConfig, AudioHookJwtClaims, initiateJwtAuthentication } from '../jwt-authenticator';
+import { isUuid, createServerSession, ServerSession, MediaDataFrame } from '../../audiohook';
+import { queryCanonicalizedHeaderField } from '../../audiohook/httpsignature';
 import { SessionWebsocketStatsTracker } from '../session-websocket-stats-tracker';
-import { createDownstreamService, DownstreamService, DownstreamConfig, AudioChunk, TranscriptionResult } from './factory';
+import { createDownstreamService, DownstreamConfig, TranscriptionResult, AudioChunk } from './factory';
 import { SessionRecord } from './session';
 import { DeepgramAdapter } from './deepgram-adapter';
 import { TCCPAdapter } from './tccp-adapter';
@@ -15,11 +17,11 @@ const isDev = process.env['NODE_ENV'] !== 'production';
 
 declare module 'fastify' {
     interface FastifyRequest {
-        authenticated?: boolean;
+        jwtPayload?: AudioHookJwtClaims;
     }
 }
 
-type AuthStrategy = 'request' | 'session';
+type AuthStrategy = 'request' | 'session' | 'jwt';
 
 /**
  * Downstream services manager - handles both Deepgram and TCCP
@@ -164,20 +166,28 @@ class DownstreamServiceManager {
         // This would need to be implemented in DeepgramAdapter to emit events
     }
 }
-export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): void => {
-    // Initialize downstream transcription services
-    const config: DownstreamConfig = {
-        service: (process.env['TRANSCRIPTION_SERVICE'] as 'deepgram' | 'tccp' | 'both') || 'deepgram',
+
+export const addAudiohookTCCPRoute = (fastify: FastifyInstance, path: string): void => {
+    // Load downstream service config
+    const downstreamConfig: DownstreamConfig = {
+        service: (process.env['TRANSCRIPTION_SERVICE'] as 'tccp' | 'deepgram') || 'deepgram',
         deepgramApiKey: process.env['DEEPGRAM_API_KEY'],
         deepgramModel: process.env['DEEPGRAM_MODEL'] || 'nova-2',
         tccpEndpoint: process.env['TCCP_ENDPOINT'],
         tccpApiKey: process.env['TCCP_API_KEY'],
-        audioCodesBotUrl: process.env['AUDIOCODES_BOT_URL'],
-        audioCodesApiKey: process.env['AUDIOCODES_API_KEY'],
-        eventWebhookUrl: process.env['EVENT_WEBHOOK_URL'],
-        sampleRate: parseInt(process.env['AUDIO_SAMPLE_RATE'] || '8000', 10),
-        channels: parseInt(process.env['AUDIO_CHANNELS'] || '1', 10),
+        sampleRate: 8000,
+        channels: 1,
     };
+
+    const downstreamService = createDownstreamService(downstreamConfig, fastify.log);
+    downstreamService.initialize().catch((err: Error) => {
+        fastify.log.error({ error: err.message }, 'Failed to initialize downstream service');
+    });
+
+    fastify.log.info({ service: downstreamConfig.service }, 'TCCP downstream service initialized');
+
+    const authStrategy: AuthStrategy = (process.env['SESSION_AUTH_STRATEGY'] as AuthStrategy) || 'session';
+    const jwtConfig = getJwtAuthConfig();
 
     let serviceManager: DownstreamServiceManager | null = null;
     const activeSessions = new Map<string, SessionRecord>();
@@ -187,10 +197,10 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
         if (serviceManager) return;
         
         try {
-            serviceManager = new DownstreamServiceManager(config, fastify.log);
+            serviceManager = new DownstreamServiceManager(downstreamConfig, fastify.log);
             await serviceManager.initialize();
             fastify.log.info({ 
-                service: config.service,
+                service: downstreamConfig.service,
                 hasDeepgram: serviceManager.hasDeepgram,
                 hasTCCP: serviceManager.hasTCCP,
             }, 'TCCP downstream services initialized');
@@ -205,8 +215,6 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
         fastify.log.error({ error: (err as Error).message }, 'Downstream service initialization failed');
     });
 
-    const authStrategy: AuthStrategy = (process.env['SESSION_AUTH_STRATEGY'] === 'request') ? 'request' : 'session';
-
     fastify.get<{
         Headers: {
             'audiohook-session-id'?: string;
@@ -220,6 +228,7 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
         websocket: true,
         onRequest: async (request, reply): Promise<unknown> => {
             request.authenticated = false;
+            
             if (authStrategy === 'request') {
                 const result = await verifyRequestSignature({ request });
                 if (result.code !== 'VERIFIED') {
@@ -228,19 +237,28 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
                     return reply.send('Signature verification failed');
                 }
                 request.authenticated = true;
+            } else if (authStrategy === 'jwt') {
+                const jwtResult = await verifyRequestJwt({ request, config: jwtConfig });
+                if (jwtResult.code !== 'VERIFIED') {
+                    request.log.info(`JWT verification failure: ${JSON.stringify(jwtResult)}`);
+                    reply.code(401);
+                    return reply.send('JWT verification failed');
+                }
+                request.authenticated = true;
+                request.jwtPayload = jwtResult.payload;
             }
             return;
         },
     }, (connection, request) => {
         request.log.info(`TCCP Websocket Request - URI: <${request.url}>, SocketRemoteAddr: ${request.socket.remoteAddress}`);
 
-        const sessionId = httpsig.queryCanonicalizedHeaderField(request.headers, 'audiohook-session-id');
+        const sessionId = queryCanonicalizedHeaderField(request.headers, 'audiohook-session-id');
         if (!sessionId || !isUuid(sessionId)) {
             throw new RangeError('Missing or invalid "audiohook-session-id" header field');
         }
 
-        const correlationId = httpsig.queryCanonicalizedHeaderField(request.headers, 'audiohook-correlation-id') || sessionId;
-        const organizationId = httpsig.queryCanonicalizedHeaderField(request.headers, 'audiohook-organization-id') || 'unknown';
+        const correlationId = queryCanonicalizedHeaderField(request.headers, 'audiohook-correlation-id') || sessionId;
+        const organizationId = queryCanonicalizedHeaderField(request.headers, 'audiohook-organization-id') || 'unknown';
 
         if (isDev && (connection.socket.binaryType !== 'nodebuffer')) {
             throw new Error(`WebSocket binary type '${connection.socket.binaryType}' not supported`);
@@ -274,15 +292,19 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
         // Handle authentication if not already done
         // In dev mode, skip auth to allow unsigned test requests
         if (!isDev && !(request.authenticated ?? false)) {
-            initiateRequestAuthentication({ session, request });
+            if (authStrategy === 'jwt') {
+                initiateJwtAuthentication({ session, request, config: jwtConfig });
+            } else {
+                initiateRequestAuthentication({ session, request });
+            }
         } else if (isDev) {
-            logger.info('Dev mode: Skipping signature authentication');
+            logger.info('Dev mode: Skipping authentication');
         }
 
         // Add media selector to accept PCMU format from microphone client
-        session.addMediaSelector((_session, offered, _openParams) => {
+        session.addMediaSelector((_session: ServerSession, offered: any[], _openParams: any) => {
             // Find PCMU format at 8kHz (what microphone client sends)
-            const pcmuMedia = offered.find(m => m.format === 'PCMU' && m.rate === 8000);
+            const pcmuMedia = offered.find((m: any) => m.format === 'PCMU' && m.rate === 8000);
             if (pcmuMedia) {
                 logger.info('Selected PCMU 8kHz media format');
                 return Promise.resolve([pcmuMedia]);
@@ -299,7 +321,7 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
         const conversationManager = getConversationManager();
 
         // Handle session open - start transcription
-        session.addOpenHandler((context) => {
+        session.addOpenHandler((context: any) => {
             const { openParams } = context;
             logger.info({ conversationId: openParams.conversationId, participant: openParams.participant }, 'TCCP session opened');
             
@@ -401,7 +423,7 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
         });
 
         // Handle session close - stop transcription and cleanup
-        session.addFiniHandler(async () => {
+        session.addFiniHandler(async (session: ServerSession) => {
             logger.info('TCCP session closing');
             sessionRecord.state = 'closed';
             sessionRecord.endedAt = new Date();
@@ -438,13 +460,13 @@ export const addAudiohookTccpRoute = (fastify: FastifyInstance, path: string): v
             logger.info('Service shutdown announced');
         });
 
-        session.addFiniHandler(() => {
+        session.addFiniHandler((session: ServerSession) => {
             lifecycleToken.unregister();
         });
 
         // Register stats tracking
         session.addOpenHandler(ws.createTrackingHandler());
-        session.addFiniHandler(() => {
+        session.addFiniHandler((session: ServerSession) => {
             fastify.log.info({ session: sessionId }, `TCCP Session statistics - ${ws.loggableSummary()}`);
         });
     });
