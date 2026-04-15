@@ -16,11 +16,11 @@ export const addAudiohookTCCPRoute = (fastify: FastifyInstance, path: string): v
 
   // Load downstream service config
   const downstreamConfig: DownstreamConfig = {
-    service: (process.env.TRANSCRIPTION_SERVICE as 'tccp' | 'deepgram') || 'deepgram',
-    deepgramApiKey: process.env.DEEPGRAM_API_KEY,
-    deepgramModel: process.env.DEEPGRAM_MODEL || 'nova-2',
-    tccpEndpoint: process.env.TCCP_ENDPOINT,
-    tccpApiKey: process.env.TCCP_API_KEY,
+    service: (process.env['TRANSCRIPTION_SERVICE'] as 'tccp' | 'deepgram') || 'deepgram',
+    deepgramApiKey: process.env['DEEPGRAM_API_KEY'],
+    deepgramModel: process.env['DEEPGRAM_MODEL'] || 'nova-2',
+    tccpEndpoint: process.env['TCCP_ENDPOINT'],
+    tccpApiKey: process.env['TCCP_API_KEY'],
     sampleRate: 8000,
     channels: 1,
   };
@@ -65,7 +65,7 @@ export const addAudiohookTCCPRoute = (fastify: FastifyInstance, path: string): v
 
     const sessionId = httpsig.queryCanonicalizedHeaderField(request.headers, 'audiohook-session-id');
     const correlationId = httpsig.queryCanonicalizedHeaderField(request.headers, 'audiohook-correlation-id');
-    const organizationId = httpsig.queryCanonicalizedHeaderField(request.headers, 'audiohook-organization-id');
+    const organizationId = httpsig.queryCanonicalizedHeaderField(request.headers, 'audiohook-organization-id') ?? undefined;
 
     if(!sessionId || !isUuid(sessionId)) {
       throw new RangeError('Missing or invalid "audiohook-session-id" header field');

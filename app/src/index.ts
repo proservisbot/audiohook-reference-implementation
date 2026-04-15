@@ -9,7 +9,7 @@ import secretsPlugin from './secrets-plugin';
 import { addAudiohookSampleRoute } from './audiohook-sample-endpoint';
 import { addAudiohookLoadTestRoute } from './audiohook-load-test-endpoint';
 import { addAudiohookVoiceTranscriptionRoute } from './audiohook-vt-endpoint';
-import { addAudiohookTccpRoute } from './tccp-integration/audiohook-tccp-endpoint';
+import { addAudiohookTCCPRoute } from './tccp-integration/audiohook-tccp-endpoint';
 
 dotenv.config();
 
@@ -42,8 +42,8 @@ server.register(async (fastify: FastifyInstance) => {
     addAudiohookSampleRoute(fastify, '/api/v1/audiohook/ws');
     addAudiohookVoiceTranscriptionRoute(fastify, '/api/v1/voicetranscription/ws');
     addAudiohookLoadTestRoute(fastify, '/api/v1/loadtest/ws');
-    addAudiohookTccpRoute(fastify, '/api/v1/tccp/ws');
-    addAudiohookTccpRoute(fastify, '/api/v1/tcp/ws');
+    addAudiohookTCCPRoute(fastify, '/api/v1/tccp/ws');
+    addAudiohookTCCPRoute(fastify, '/api/v1/tcp/ws');
 });
 
 

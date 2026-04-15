@@ -339,12 +339,7 @@ export const initiateJwtAuthentication = (params: InitiateJwtAuthenticationParam
         if (result.code === 'VERIFIED') {
             // Log successful authentication details
             const payload = result.payload;
-            session.logger.info({
-                orgId: payload.orgId,
-                conversationId: payload.conversationId,
-                participantId: payload.participantId,
-                exp: new Date(payload.exp * 1000).toISOString(),
-            }, 'JWT authentication successful');
+            session.logger.info(`JWT authentication successful - orgId: ${payload.orgId}, conversationId: ${payload.conversationId}, participantId: ${payload.participantId}, exp: ${new Date(payload.exp * 1000).toISOString()}`);
             return result;
         } else if (signalingMode === 'immediate') {
             // Signal failure immediately

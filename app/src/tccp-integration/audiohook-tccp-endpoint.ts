@@ -258,7 +258,7 @@ export const addAudiohookTCCPRoute = (fastify: FastifyInstance, path: string): v
         }
 
         const correlationId = queryCanonicalizedHeaderField(request.headers, 'audiohook-correlation-id') || sessionId;
-        const organizationId = queryCanonicalizedHeaderField(request.headers, 'audiohook-organization-id') || 'unknown';
+        const organizationId = queryCanonicalizedHeaderField(request.headers, 'audiohook-organization-id') || undefined;
 
         if (isDev && (connection.socket.binaryType !== 'nodebuffer')) {
             throw new Error(`WebSocket binary type '${connection.socket.binaryType}' not supported`);
@@ -280,7 +280,7 @@ export const addAudiohookTCCPRoute = (fastify: FastifyInstance, path: string): v
         // Create session record for tracking
         const sessionRecord: SessionRecord = {
             sessionId,
-            conversationId: organizationId,
+            conversationId: correlationId,
             correlationId,
             startedAt: new Date(),
             state: 'connecting',
