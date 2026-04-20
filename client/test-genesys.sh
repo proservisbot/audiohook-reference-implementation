@@ -48,7 +48,8 @@ if echo "$HEALTH" | grep -q '"Healthy":true'; then
         npm start -- \
             --uri "$SERVER_URI" \
             --wavfile "$WAV_FILE" \
-            --api-key "$API_KEY"
+            --api-key "$API_KEY" \
+            --client-secret "$CLIENT_SECRET"
     fi
 else
     echo "ERROR: Server health check failed!"
