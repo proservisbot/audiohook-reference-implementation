@@ -56,6 +56,9 @@ $SSH_CMD "cd /opt/audiohook-server/app && npm install --registry=https://registr
 echo -e "${CYAN}[4/4] Restarting application...${NC}"
 $SSH_CMD "pm2 restart audiohook && pm2 save"
 
+echo -e "${YELLOW}Waiting for service to start...${NC}"
+sleep 10
+
 echo ""
 echo -e "${GREEN}============================================${NC}"
 echo -e "${GREEN}  Deploy complete!${NC}"

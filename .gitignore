@@ -1,4 +1,5 @@
 _notes.txt
+secrets.txt
 .DS_Store
 /cdk-exports.json
 /cdk.context.json
